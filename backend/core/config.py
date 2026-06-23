@@ -32,6 +32,10 @@ class Settings(BaseSettings):
         default="verity_chunks",
         description="Qdrant collection name for storing chunk vectors"
     )
+    qdrant_api_key: str | None = Field(
+        default=None,
+        description="Qdrant Cloud API key (leave empty for local Qdrant)"
+    )
     redis_url: str = Field(description="Redis connection URL")
 
     # Embedding
@@ -56,6 +60,10 @@ class Settings(BaseSettings):
     app_env: str = Field(
         default="development",
         description="Runtime environment: development | production"
+    )
+    cors_origins: str = Field(
+        default="http://localhost:3000",
+        description="Comma-separated allowed CORS origins (frontend URLs)"
     )
 
 

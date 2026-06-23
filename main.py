@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routes.research import router as research_router
+from backend.core.config import settings
 from backend.db.qdrant_client import init_collection
 
 LOGGING_CONFIG = {
@@ -45,7 +46,7 @@ app = FastAPI(title="Verity", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
