@@ -32,13 +32,13 @@ Verity: [reads 5 relevant chunks from ingested papers]
   ├── Sparse BM25 (Postgres) ← keyword full-text search
   └── Graph Entity (Qdrant)  ← entity-overlap matching
      ↓
-[RRF Fusion + Cross-Encoder Reranking]
+[RRF Fusion]
      ↓
 [Grader Agent]           ← relevant? → continue / no → web search
      ↓
 [Contradiction Detector] ← flags conflicting claims between chunks
      ↓
-[Generator]              ← Groq LLM, streaming SSE response
+[Generator]              ← Llama 3.3 70B (OpenRouter), streaming SSE
      ↓
 [Citation Verifier]      ← checks [1][2] citations against source chunks
      ↓
@@ -46,6 +46,10 @@ Verity: [reads 5 relevant chunks from ingested papers]
      ↓
 [Streaming Response]
 ```
+
+> This is the full `/research/query` agentic pipeline. The chat UI calls
+> `/research/query/stream` — a latency-optimized subset (dense + sparse retrieval;
+> grader / contradiction / citation / hallucination steps skipped for speed).
 
 Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRAM.md)
 
@@ -57,15 +61,14 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 |-------|-----------|
 | Backend | FastAPI + Python 3.12 |
 | Agent Orchestration | LangGraph |
-| LLM | Groq (Llama 3.3 70B) |
+| LLM | Llama 3.3 70B via OpenRouter |
+| Vision | Llama 4 Scout via OpenRouter |
 | Vector DB | Qdrant |
 | Relational DB | PostgreSQL + SQLAlchemy |
 | Full-text Search | PostgreSQL FTS (tsvector + GIN) |
-| Embeddings | BAAI/bge-small-en-v1.5 (local, no API key) |
-| Reranking | cross-encoder/ms-marco-MiniLM-L-6-v2 |
+| Embeddings | BAAI/bge-small-en-v1.5 (local ONNX via fastembed, no API key) |
 | Task Queue | Celery + Redis |
-| Tracing | Langfuse (optional) |
-| Evaluation | RAGAS |
+| Tracing | Langfuse (optional, generation span) |
 | Frontend | Next.js 16 + Tailwind + shadcn/ui |
 | Deployment | Docker Compose |
 
@@ -83,7 +86,7 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 **Ingestion**
 - PDF, DOCX, TXT, Markdown, Web URLs
 - Text cleaning — removes emails, DOIs, references, copyright noise
-- Multi-modal — PDF image extraction + Groq vision descriptions
+- Multi-modal — PDF image extraction + vision-LLM descriptions (Llama 4 Scout via OpenRouter)
 - Hash deduplication — same file ingested twice → instant skip
 - Async ingestion via Celery for large documents
 
@@ -93,7 +96,7 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 - Contradiction Detector — flags conflicting claims between sources
 - Generator — context-grounded answer with streaming SSE
 - Citation Verifier — verifies [1][2] references against chunks
-- Hallucination Checker — answer grounded in retrieved context?
+- Hallucination Checker — answer grounded in retrieved context? *(full `/query` path; skipped in streaming for latency)*
 - Web Search Agent — Tavily/DuckDuckGo fallback, auto-ingests into KB
 
 **Memory**
@@ -102,14 +105,26 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 
 ---
 
+## Roadmap
+
+Honest status of components that are designed but not yet shipped:
+
+- 🚧 **Cross-encoder reranking** — in progress. Ranking is currently RRF-only; a relevance reranker (ms-marco-MiniLM, ONNX) is being added.
+- 🚧 **RAGAS evaluation harness** — in progress. Metric schemas exist; the evaluator/runner is being wired up (benchmark numbers will land here).
+- 📋 **True semantic chunking** — planned. The semantic chunker currently falls back to recursive splitting.
+- 📋 **Full-pipeline tracing** — planned. Langfuse currently traces the generation step only.
+
+---
+
 ## Quick Start
 
 **1. Clone and setup**
 ```bash
-git clone https://github.com/your-username/Verity.git
+git clone https://github.com/anuragchaubey1224/Verity.git
 cd Verity
 python -m venv venv
-venv\Scripts\activate        # Windows
+source venv/bin/activate     # macOS / Linux
+# venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 ```
 
@@ -117,13 +132,16 @@ pip install -r requirements.txt
 
 Create `.env` file:
 ```env
-GROQ_API_KEY=your_groq_key
-POSTGRES_URL=postgresql+asyncpg://postgres:password@localhost:5432/verity
+OPENROUTER_API_KEY=sk-or-...
+# Ports below match the docker-compose host mappings (5433 / 6380)
+POSTGRES_URL=postgresql+asyncpg://postgres:password@localhost:5433/verity
 QDRANT_URL=http://localhost:6333
-REDIS_URL=redis://localhost:6379/0
+REDIS_URL=redis://localhost:6380/0
 
 # Optional
-TAVILY_API_KEY=your_tavily_key
+LLM_MODEL=meta-llama/llama-3.3-70b-instruct:free
+FAST_LLM_MODEL=google/gemma-3-4b-it:free
+TAVILY_API_KEY=
 LANGFUSE_PUBLIC_KEY=
 LANGFUSE_SECRET_KEY=
 ```
@@ -203,7 +221,7 @@ Verity/
 │   ├── ingestion/       # Parsers, chunkers, cleaning, embedding
 │   │   ├── cleaning/    # Text noise removal
 │   │   ├── graph/       # Entity extraction
-│   │   ├── multimodal/  # PDF image → Groq vision
+│   │   ├── multimodal/  # PDF image → vision LLM
 │   │   └── raptor/      # Cluster summarization
 │   ├── memory/          # Conversation history store
 │   ├── retrieval/       # Dense, sparse, hybrid, HyDE, graph
@@ -221,8 +239,10 @@ Verity/
 
 ## Evaluation
 
+> 🚧 **In progress** (see [Roadmap](#roadmap)). The harness wires up RAGAS metrics —
+> Faithfulness, Answer Relevancy, Context Recall, Context Precision — over a curated
+> Q/A set. Benchmark numbers will be published here once the evaluator lands.
+
 ```bash
 python -m scripts.run_eval
 ```
-
-RAGAS metrics: Faithfulness, Answer Relevancy, Context Recall, Context Precision.
