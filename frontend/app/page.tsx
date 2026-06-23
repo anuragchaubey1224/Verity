@@ -88,6 +88,10 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
+  useEffect(() => () => {
+    if (rateLimitTimerRef.current) clearInterval(rateLimitTimerRef.current)
+  }, [])
+
   async function refreshSessions() {
     try { setSessions(await fetchSessions(getUserId())) } catch { /* non-critical */ }
   }
@@ -152,14 +156,21 @@ export default function ChatPage() {
               return updated
             })
           } else if (event.type === "error") {
-            setMessages(prev => prev.slice(0, -1))
+            // keep any partial answer; only drop an empty assistant bubble
+            setMessages(prev => {
+              const last = prev[prev.length - 1]
+              return last?.role === "assistant" && !last.content ? prev.slice(0, -1) : prev
+            })
             setError(event.content)
           }
         }
       )
       refreshSessions()
     } catch (err) {
-      setMessages(prev => prev.slice(0, -1))
+      setMessages(prev => {
+        const last = prev[prev.length - 1]
+        return last?.role === "assistant" && !last.content ? prev.slice(0, -1) : prev
+      })
       if (err instanceof RateLimitError) {
         setRateLimitSeconds(err.retryAfter)
         if (rateLimitTimerRef.current) clearInterval(rateLimitTimerRef.current)
@@ -418,12 +429,6 @@ export default function ChatPage() {
                             {m}
                           </span>
                         ))}
-                        {msg.pipeline.reranked && (
-                          <span className="text-xs px-2.5 py-1 rounded-full font-medium"
-                            style={{ background: "var(--secondary)", color: "var(--muted-foreground)", border: "1px solid var(--border)" }}>
-                            RRF Fusion
-                          </span>
-                        )}
                       </div>
                     )}
 

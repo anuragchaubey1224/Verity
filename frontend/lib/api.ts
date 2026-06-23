@@ -91,39 +91,59 @@ export async function queryKBStream(
   req: QueryRequest,
   onEvent: (event: StreamEvent) => void,
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/research/query/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  })
-
-  if (res.status === 429) {
-    const data = await res.json().catch(() => ({}))
-    throw new RateLimitError(data?.detail?.retry_after ?? 1200)
+  // Abort if the backend goes silent for too long, so the UI never hangs forever.
+  const controller = new AbortController()
+  const IDLE_MS = 90_000
+  let idle = setTimeout(() => controller.abort(), IDLE_MS)
+  const resetIdle = () => {
+    clearTimeout(idle)
+    idle = setTimeout(() => controller.abort(), IDLE_MS)
   }
 
-  if (!res.ok || !res.body) throw new Error(await res.text().catch(() => res.statusText))
+  try {
+    const res = await fetch(`${API_BASE}/research/query/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    })
 
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
+    if (res.status === 429) {
+      const data = await res.json().catch(() => ({}))
+      throw new RateLimitError(data?.detail?.retry_after ?? 1200)
+    }
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+    if (!res.ok || !res.body) throw new Error(await res.text().catch(() => res.statusText))
 
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split("\n")
-    buffer = lines.pop() ?? ""
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
 
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        try {
-          const event = JSON.parse(line.slice(6)) as StreamEvent
-          onEvent(event)
-        } catch { /* skip malformed lines */ }
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      resetIdle()
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split("\n")
+      buffer = lines.pop() ?? ""
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const event = JSON.parse(line.slice(6)) as StreamEvent
+            onEvent(event)
+          } catch { /* skip malformed lines */ }
+        }
       }
     }
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error("The request timed out — the server stopped responding. Please try again.")
+    }
+    throw err
+  } finally {
+    clearTimeout(idle)
   }
 }
 
