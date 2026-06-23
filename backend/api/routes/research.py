@@ -269,10 +269,12 @@ async def query_stream(
         active_chunks = chunks
         web_search_used = False
 
-        # Cosine similarity threshold — meaningful relevance signal
-        # BAAI/bge-small: > 0.45 = relevant, < 0.45 = KB miss → web fallback
-        # RRF scores (0.013-0.033) are rank-based, useless for this decision
-        needs_web = not active_chunks or best_dense_score < 0.45
+        # Cosine similarity threshold — meaningful relevance signal.
+        # BAAI/bge-small scores any English text ~0.45-0.55, so an off-topic query
+        # (e.g. a sports result against an ML-papers KB) still clears a low bar and
+        # never reaches web search. Threshold is configurable via WEB_FALLBACK_THRESHOLD.
+        # RRF scores (0.013-0.033) are rank-based, useless for this decision.
+        needs_web = not active_chunks or best_dense_score < settings.web_fallback_threshold
 
         if needs_web:
             yield f"data: {json.dumps({'type': 'token', 'content': '_Searching the web..._\n\n'})}\n\n"

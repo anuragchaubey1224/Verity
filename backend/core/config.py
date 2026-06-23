@@ -71,6 +71,12 @@ class Settings(BaseSettings):
         default=30,
         description="How many fused candidates to rerank before taking top_k"
     )
+    web_fallback_threshold: float = Field(
+        default=0.6,
+        description="If best dense cosine score is below this, treat as KB miss and fall back to web "
+                    "search. bge-small scores any English text ~0.45-0.55, so a low bar wrongly keeps "
+                    "off-topic queries in the KB and never triggers web search. Tune per embedding model."
+    )
 
     # Langfuse (optional — leave empty to disable tracing)
     langfuse_public_key: str | None = Field(default=None, description="Langfuse public key for LLM tracing")
