@@ -325,14 +325,15 @@ async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = D
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources, 'chunks_used': len(active_chunks)})}\n\n"
 
         # Pipeline transparency event
-        methods = ["Web Search"] if web_search_used else ["HyDE Dense", "Sparse BM25", "Graph RAG"]
+        # Stream path runs dense + sparse + RRF only (HyDE/graph disabled, no reranker)
+        methods = ["Web Search"] if web_search_used else ["Dense (Qdrant)", "Sparse BM25"]
         pipeline_info = {
             "type": "pipeline",
             "methods": methods,
             "chunks_retrieved": len(active_chunks),
-            "reranked": not web_search_used,
-            "has_hallucination": has_hallucination,
-            "grader_passed": True,
+            "reranked": False,  # no reranker yet — RRF fusion only
+            "has_hallucination": has_hallucination,  # check skipped in stream path
+            "grader_passed": not web_search_used,  # KB confidence ok => used directly
         }
         yield f"data: {json.dumps(pipeline_info)}\n\n"
 
