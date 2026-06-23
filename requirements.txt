@@ -74,10 +74,9 @@ arxiv
 tavily-python
 
 # -------------------------------------------------------------
-# Evaluation
+# Evaluation & Testing
 # -------------------------------------------------------------
-ragas
-datasets
+# (eval uses the built-in LLM-as-judge harness — no external eval framework)
 pytest
 pytest-asyncio
 
