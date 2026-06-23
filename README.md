@@ -32,7 +32,7 @@ Verity: [reads 5 relevant chunks from ingested papers]
   ├── Sparse BM25 (Postgres) ← keyword full-text search
   └── Graph Entity (Qdrant)  ← entity-overlap matching
      ↓
-[RRF Fusion]
+[RRF Fusion → Cross-Encoder Rerank]
      ↓
 [Grader Agent]           ← relevant? → continue / no → web search
      ↓
@@ -48,8 +48,9 @@ Verity: [reads 5 relevant chunks from ingested papers]
 ```
 
 > This is the full `/research/query` agentic pipeline. The chat UI calls
-> `/research/query/stream` — a latency-optimized subset (dense + sparse retrieval;
-> grader / contradiction / citation / hallucination steps skipped for speed).
+> `/research/query/stream` — a latency-optimized subset: dense + sparse retrieval,
+> RRF fusion and cross-encoder reranking, then streamed generation (the grader /
+> contradiction / citation / hallucination agents run only on `/research/query`).
 
 Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRAM.md)
 
@@ -67,10 +68,12 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 | Relational DB | PostgreSQL + SQLAlchemy |
 | Full-text Search | PostgreSQL FTS (tsvector + GIN) |
 | Embeddings | BAAI/bge-small-en-v1.5 (local ONNX via fastembed, no API key) |
+| Reranking | Cross-encoder ms-marco-MiniLM-L-6-v2 (ONNX via fastembed, no torch) |
 | Task Queue | Celery + Redis |
 | Tracing | Langfuse (optional, generation span) |
+| Evaluation | LLM-as-judge (faithfulness, relevancy, context recall/precision) |
 | Frontend | Next.js 16 + Tailwind + shadcn/ui |
-| Deployment | Docker Compose |
+| Deployment | Docker Compose · HF Spaces + Vercel (free tier) |
 
 ---
 
@@ -78,6 +81,7 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 
 **Retrieval**
 - Hybrid retrieval — dense + sparse fused with Reciprocal Rank Fusion (RRF)
+- Cross-encoder reranking — RRF candidates rescored by a relevance cross-encoder (ONNX, no torch)
 - HyDE — query expanded to hypothetical answer before embedding
 - Graph RAG — entity extraction + entity-overlap retrieval
 - RAPTOR — cluster summaries for broad questions
@@ -109,10 +113,9 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 
 Honest status of components that are designed but not yet shipped:
 
-- 🚧 **Cross-encoder reranking** — in progress. Ranking is currently RRF-only; a relevance reranker (ms-marco-MiniLM, ONNX) is being added.
-- 🚧 **RAGAS evaluation harness** — in progress. Metric schemas exist; the evaluator/runner is being wired up (benchmark numbers will land here).
 - 📋 **True semantic chunking** — planned. The semantic chunker currently falls back to recursive splitting.
 - 📋 **Full-pipeline tracing** — planned. Langfuse currently traces the generation step only.
+- 📋 **Graph retrieval on by default** — entity extraction is implemented but off by default (it adds an LLM call per chunk at ingest time); enable with `ENABLE_ENTITY_EXTRACTION=true`.
 
 ---
 
@@ -172,13 +175,15 @@ Open `http://localhost:3000`
 
 ---
 
-## One-command Deployment (Docker)
+## Deployment
 
+**Local (one command):**
 ```bash
 docker-compose up --build
 ```
-
 Starts everything: Postgres, Qdrant, Redis, backend (with auto-migration), Celery worker, frontend.
+
+**Free-tier cloud** — Vercel (frontend) + Hugging Face Spaces (backend + worker) + Neon (Postgres) + Qdrant Cloud + Upstash (Redis), auto-deployed on push → see [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ---
 
@@ -239,10 +244,13 @@ Verity/
 
 ## Evaluation
 
-> 🚧 **In progress** (see [Roadmap](#roadmap)). The harness wires up RAGAS metrics —
-> Faithfulness, Answer Relevancy, Context Recall, Context Precision — over a curated
-> Q/A set. Benchmark numbers will be published here once the evaluator lands.
+An LLM-as-judge harness scores the pipeline on four metrics — **faithfulness,
+answer relevancy, context recall, context precision** — over a golden Q/A set,
+and compares retrieval **without vs with** the cross-encoder reranker.
 
 ```bash
 python -m scripts.run_eval
 ```
+
+Prints a baseline-vs-reranker table and writes `reports/eval_report.json`.
+*(Benchmark numbers to be added here.)*

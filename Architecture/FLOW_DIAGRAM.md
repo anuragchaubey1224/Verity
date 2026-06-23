@@ -21,7 +21,7 @@ Verity exposes **two answer paths**:
 ```mermaid
 flowchart TD
     A([User Query]) --> P[Planner<br/>complexity analysis + sub-queries]
-    P --> R[Hybrid Retriever<br/>dense + sparse + HyDE + graph → RRF]
+    P --> R[Hybrid Retriever<br/>dense + sparse + HyDE + graph → RRF → rerank]
     R --> G{Grader<br/>chunks relevant?}
 
     G -->|relevant & chunks exist| CD[Contradiction Detector]
@@ -50,7 +50,7 @@ flowchart TD
 
     H --> DG{Domain guard<br/>query on selected domain?}
     DG -->|off-domain| REF([Polite refusal])
-    DG -->|ok / all| RET[Fast Retriever<br/>dense + sparse + RRF<br/>HyDE and graph DISABLED]
+    DG -->|ok / all| RET[Fast Retriever<br/>dense + sparse + RRF + rerank<br/>HyDE and graph DISABLED]
 
     RET --> C{best dense cosine ≥ 0.45?}
     C -->|yes| GEN[Stream Generator tokens - SSE]
@@ -88,7 +88,12 @@ flowchart TD
         D --> RRF[Reciprocal Rank Fusion<br/>score = Σ 1/&#40;k+rank&#41;, k=60]
         S --> RRF
         GR --> RRF
-        RRF --> TOP[Top-K fused - default 8]
+        RRF --> CAND[Top-30 fused candidates]
+    end
+
+    subgraph Stage3["Stage 3 — Rerank (if enabled)"]
+        CAND --> CE[Cross-encoder rescoring<br/>ms-marco-MiniLM, ONNX]
+        CE --> TOP[Final top-k - default 8]
     end
 
     D --> BD[best_dense_score = max cosine 0–1]
@@ -97,7 +102,7 @@ flowchart TD
     THR -->|yes| USE([Use KB context])
     THR -->|no| FALL([Web search fallback])
 
-    note["No cross-encoder reranker yet — ranking is RRF only.<br/>RRF scores are rank-based (~0.013–0.033), so the web-fallback<br/>decision uses the raw dense cosine, not the RRF score."]
+    note["Cross-encoder reranking reorders the RRF candidates by query-document<br/>relevance. RRF scores are rank-based (~0.013–0.033), so the web-fallback<br/>decision still uses the raw dense cosine, not the rerank score."]
 ```
 
 ---
