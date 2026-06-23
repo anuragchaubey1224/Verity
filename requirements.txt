@@ -50,6 +50,7 @@ qdrant-client
 # Relational Database
 # -------------------------------------------------------------
 sqlalchemy
+greenlet            # required by SQLAlchemy async (not always auto-installed)
 asyncpg
 psycopg2-binary
 alembic
