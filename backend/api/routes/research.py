@@ -64,7 +64,9 @@ from backend.api.schemas.research import (
     TaskStatusResponse,
 )
 from backend.db.models.document import Document
+from backend.db.models.user import User
 from backend.db.postgres import get_db
+from backend.api.dependencies.auth import get_current_user
 from backend.api.middleware.rate_limit import check_rate_limit
 from backend.ingestion.pipeline import ingest_document
 from backend.memory.conversation_store import load_history, save_exchange
@@ -74,8 +76,8 @@ router = APIRouter(prefix="/research", tags=["research"])
 
 
 @router.get("/sessions")
-async def list_sessions(user_id: str, db: AsyncSession = Depends(get_db)):
-    """Return the last 30 sessions belonging to this user (filtered by user_id prefix)."""
+async def list_sessions(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Return the last 30 sessions belonging to the authenticated user."""
     result = await db.execute(text("""
         SELECT
             ch.session_id,
@@ -87,11 +89,11 @@ async def list_sessions(user_id: str, db: AsyncSession = Depends(get_db)):
             MAX(ch.created_at) AS last_at,
             COUNT(*) AS message_count
         FROM conversation_history ch
-        WHERE ch.session_id LIKE :prefix
+        WHERE ch.user_id = CAST(:uid AS uuid)
         GROUP BY ch.session_id
         ORDER BY last_at DESC
         LIMIT 30
-    """), {"prefix": f"{user_id}_%"})
+    """), {"uid": str(current_user.id)})
     rows = result.fetchall()
     return [
         {
@@ -105,15 +107,20 @@ async def list_sessions(user_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_db)):
-    """Return all messages for a session in chronological order."""
+async def get_session_messages(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all messages for a session the caller owns (chronological)."""
     result = await db.execute(
         text("""
             SELECT role, content FROM conversation_history
             WHERE session_id = :session_id
+              AND user_id = CAST(:uid AS uuid)
             ORDER BY created_at ASC
         """),
-        {"session_id": session_id},
+        {"session_id": session_id, "uid": str(current_user.id)},
     )
     rows = result.fetchall()
     return [{"role": r.role, "content": r.content} for r in rows]
@@ -124,6 +131,7 @@ async def upload_file(
     file: UploadFile = File(...),
     title: str = Form(...),
     domain: str = Form(default="ml"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a PDF (or any file) directly — saved locally then ingested through the full pipeline."""
@@ -139,24 +147,30 @@ async def upload_file(
         title=title,
         db=db,
         domain=domain,
+        user_id=str(current_user.id),
     )
     return IngestResponse(document_id=str(doc.id), title=doc.title, status=doc.status)
 
 
 @router.post("/ingest", response_model=IngestResponse)
-async def ingest(request: IngestRequest, db: AsyncSession = Depends(get_db)):
+async def ingest(
+    request: IngestRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Synchronous ingest — waits until complete. Good for small files."""
     doc = await ingest_document(
         source=request.source,
         title=request.title,
         db=db,
         domain=request.domain,
+        user_id=str(current_user.id),
     )
     return IngestResponse(document_id=str(doc.id), title=doc.title, status=doc.status)
 
 
 @router.post("/ingest/async", response_model=AsyncIngestResponse)
-async def ingest_async(request: IngestRequest):
+async def ingest_async(request: IngestRequest, current_user: User = Depends(get_current_user)):
     """Async ingest — queues a background task and returns immediately."""
     from backend.workers.tasks import ingest_document_task
 
@@ -164,6 +178,7 @@ async def ingest_async(request: IngestRequest):
         source=request.source,
         title=request.title,
         domain=request.domain,
+        user_id=str(current_user.id),
     )
     return AsyncIngestResponse(
         task_id=task.id,
@@ -173,7 +188,7 @@ async def ingest_async(request: IngestRequest):
 
 
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse)
-async def get_task_status(task_id: str):
+async def get_task_status(task_id: str, current_user: User = Depends(get_current_user)):
     """Check the status of a background ingestion task."""
     result = AsyncResult(task_id, app=celery_app)
 
@@ -191,12 +206,18 @@ async def get_task_status(task_id: str):
 
 
 @router.post("/query/stream")
-async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = Depends(get_db)):
+async def query_stream(
+    request: QueryRequest,
+    req: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Streaming query — tokens arrive in real-time via Server-Sent Events."""
 
-    # Rate limiting — 2 requests per IP per 20 minutes
-    client_ip = req.client.host if req.client else "unknown"
-    allowed, retry_after = check_rate_limit(client_ip)
+    user_id = str(current_user.id)
+
+    # Rate limiting — per authenticated user
+    allowed, retry_after = check_rate_limit(user_id)
     if not allowed:
         raise HTTPException(
             status_code=429,
@@ -205,7 +226,7 @@ async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = D
 
     conversation_history = []
     if request.session_id:
-        conversation_history = await load_history(request.session_id, db)
+        conversation_history = await load_history(request.session_id, db, user_id=user_id)
 
     # Domain guard — fast binary check before retrieval
     if request.domain and request.domain != "all" and request.domain in _DOMAIN_LABELS:
@@ -230,6 +251,7 @@ async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = D
         db=db,
         top_k=request.top_k,
         domain=request.domain,
+        user_id=user_id,
     )
 
     # Fetch document titles for source enrichment
@@ -285,6 +307,7 @@ async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = D
                                 title=r.get("title") or r.get("url", "Web Result")[:200],
                                 source_url=r.get("url", ""),
                                 domain=request.domain,
+                                user_id=user_id,
                             ),
                             ignore_result=True,
                         )
@@ -296,7 +319,7 @@ async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = D
 
         # Stream tokens
         gen_state = {
-            "query": request.query, "domain": request.domain, "db": db,
+            "query": request.query, "domain": request.domain, "user_id": user_id, "db": db,
             "session_id": request.session_id, "conversation_history": conversation_history,
             "plan": {}, "sub_queries": [], "chunks": active_chunks,
             "contradictions": [], "context": "", "answer": "",
@@ -362,6 +385,7 @@ async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = D
                 query=request.query,
                 answer=full_answer,
                 db=db,
+                user_id=user_id,
             )
 
         yield "data: {\"type\": \"done\"}\n\n"
@@ -377,18 +401,24 @@ async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = D
 
 
 @router.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest, db: AsyncSession = Depends(get_db)):
+async def query(
+    request: QueryRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Query the knowledge base using the agentic RAG pipeline."""
     graph = build_graph()
+    user_id = str(current_user.id)
 
     # Load conversation history if session_id provided
     conversation_history = []
     if request.session_id:
-        conversation_history = await load_history(request.session_id, db)
+        conversation_history = await load_history(request.session_id, db, user_id=user_id)
 
     result = await graph.ainvoke({
         "query": request.query,
         "domain": request.domain,
+        "user_id": user_id,
         "db": db,
         "session_id": request.session_id,
         "conversation_history": conversation_history,
@@ -424,6 +454,7 @@ async def query(request: QueryRequest, db: AsyncSession = Depends(get_db)):
             query=request.query,
             answer=answer,
             db=db,
+            user_id=user_id,
         )
 
     return QueryResponse(

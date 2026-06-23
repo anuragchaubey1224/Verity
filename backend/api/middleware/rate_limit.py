@@ -9,7 +9,7 @@ log = logging.getLogger("verity.rate_limit")
 _client = redis.from_url(settings.redis_url, decode_responses=True)
 
 WINDOW_SECONDS = 20 * 60  # 20 minutes
-MAX_REQUESTS = 2
+MAX_REQUESTS = 20  # per authenticated user
 
 
 def check_rate_limit(ip: str) -> tuple[bool, int]:
