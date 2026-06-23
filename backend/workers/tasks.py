@@ -7,7 +7,7 @@ log = logging.getLogger("verity.workers.tasks")
 
 
 @celery_app.task(name="ingest_document", bind=True)
-def ingest_document_task(self, source: str, title: str, domain: str | None = None) -> dict:
+def ingest_document_task(self, source: str, title: str, domain: str | None = None, user_id: str | None = None) -> dict:
     """Background task — parse, chunk, embed, and store a document."""
     log.info("[task] ingest_document started | title=%r | source=%s", title, source)
 
@@ -18,7 +18,7 @@ def ingest_document_task(self, source: str, title: str, domain: str | None = Non
 
         init_collection()
         async with AsyncSessionLocal() as db:
-            doc = await ingest_document(source=source, title=title, db=db, domain=domain)
+            doc = await ingest_document(source=source, title=title, db=db, domain=domain, user_id=user_id)
             return {"document_id": str(doc.id), "title": doc.title, "status": doc.status}
 
     result = asyncio.run(_run())
@@ -33,6 +33,7 @@ def ingest_text_task(
     title: str,
     source_url: str = "",
     domain: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """Background task — ingest raw text (e.g. from web search) into the KB."""
     log.info("[task] ingest_text started | title=%r", title)
@@ -52,7 +53,7 @@ def ingest_text_task(
 
         try:
             async with AsyncSessionLocal() as db:
-                doc = await ingest_document(source=tmp_path, title=title, db=db, domain=domain)
+                doc = await ingest_document(source=tmp_path, title=title, db=db, domain=domain, user_id=user_id)
                 return {"document_id": str(doc.id), "status": doc.status}
         finally:
             os.unlink(tmp_path)

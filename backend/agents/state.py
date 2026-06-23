@@ -4,6 +4,7 @@ from typing import Any, TypedDict
 class AgentState(TypedDict):
     query: str
     domain: str | None
+    user_id: str | None           # owner — scopes retrieval/ingest to this user
     db: Any                       # AsyncSession — passed per request, not serialized
     session_id: str | None        # for memory system
     conversation_history: list    # list of {"role": ..., "content": ...}

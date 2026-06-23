@@ -50,6 +50,7 @@ class HybridRetriever:
         db: AsyncSession,
         top_k: int = 8,
         domain: str | None = None,
+        user_id: str | None = None,
     ) -> tuple[list[RetrievedChunk], float]:
         """Returns (chunks, best_dense_score).
 
@@ -57,23 +58,23 @@ class HybridRetriever:
         (range 0-1). Use this for web fallback decisions — RRF scores are
         rank-based (always ~0.013-0.033) and meaningless for relevance threshold.
         """
-        log.info("[hybrid] starting retrieval | hyde=%s | graph=%s | domain=%s",
-                 self.use_hyde, self.use_graph, domain)
+        log.info("[hybrid] starting retrieval | hyde=%s | graph=%s | domain=%s | user=%s",
+                 self.use_hyde, self.use_graph, domain, user_id)
 
         loop = asyncio.get_event_loop()
 
         # Run HyDE (blocking LLM call) and sparse (async DB) concurrently
         if self.use_hyde:
             hyde_task = loop.run_in_executor(_thread_pool, generate_hypothetical_document, query)
-            sparse_task = self.sparse.retrieve(query, db=db, top_k=20, domain=domain)
+            sparse_task = self.sparse.retrieve(query, db=db, top_k=20, domain=domain, user_id=user_id)
             dense_query, sparse_results = await asyncio.gather(hyde_task, sparse_task)
         else:
-            sparse_results = await self.sparse.retrieve(query, db=db, top_k=20, domain=domain)
+            sparse_results = await self.sparse.retrieve(query, db=db, top_k=20, domain=domain, user_id=user_id)
             dense_query = query
 
         # Dense runs after HyDE (needs the hypothetical doc as query)
         dense_results = await loop.run_in_executor(
-            _thread_pool, self.dense.retrieve, dense_query, 20, domain
+            _thread_pool, self.dense.retrieve, dense_query, 20, domain, user_id
         )
 
         # Capture best cosine similarity BEFORE RRF overwrites scores
@@ -84,7 +85,7 @@ class HybridRetriever:
 
         if self.use_graph:
             graph_results = await loop.run_in_executor(
-                _thread_pool, retrieve_by_entities, query, 10, domain
+                _thread_pool, retrieve_by_entities, query, 10, domain, user_id
             )
             if graph_results:
                 results_to_fuse.append(graph_results)

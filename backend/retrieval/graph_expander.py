@@ -1,7 +1,7 @@
 import json
 import logging
 
-from qdrant_client.models import FieldCondition, Filter, MatchAny
+from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
 from backend.core.config import settings
 from backend.db.qdrant_client import client as qdrant_client
@@ -42,6 +42,7 @@ def retrieve_by_entities(
     query: str,
     top_k: int = 10,
     domain: str | None = None,
+    user_id: str | None = None,
 ) -> list[RetrievedChunk]:
     """Find chunks whose entity lists overlap with the query's entities.
 
@@ -56,6 +57,8 @@ def retrieve_by_entities(
     log.info("[graph] query entities: %s", entities)
 
     must = [FieldCondition(key="entities", match=MatchAny(any=entities))]
+    if user_id:
+        must.append(FieldCondition(key="user_id", match=MatchValue(value=user_id)))
     if domain:
         must.append(FieldCondition(key="domain", match=MatchAny(any=[domain])))
 

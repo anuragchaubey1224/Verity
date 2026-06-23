@@ -62,17 +62,20 @@ async def ingest_document(
     title: str,
     db: AsyncSession,
     domain: str | None = None,
+    user_id: str | None = None,
 ) -> Document:
     """Full ingestion pipeline: parse → chunk → embed → store in Qdrant + Postgres."""
 
     doc_type = _detect_type(source)
     log.info("[pipeline] starting | title=%r | type=%s | domain=%s", title, doc_type, domain)
 
-    # Hash deduplication — skip if already ingested
+    uid = uuid.UUID(user_id) if user_id else None
+
+    # Hash deduplication — scoped per user (same user + same file → skip)
     file_hash = _compute_hash(source)
     if file_hash:
         existing = await db.scalar(
-            select(Document).where(Document.file_hash == file_hash)
+            select(Document).where(Document.file_hash == file_hash, Document.user_id == uid)
         )
         if existing:
             log.info("[pipeline] duplicate detected (hash=%s) — skipping | id=%s", file_hash[:12], existing.id)
@@ -111,7 +114,7 @@ async def ingest_document(
 
     # Step 6: Save Document row
     log.info("[pipeline] step 6/7 — saving to Postgres...")
-    doc = Document(title=title, source_path=source, domain=domain, status="processing", file_hash=file_hash)
+    doc = Document(title=title, source_path=source, domain=domain, status="processing", file_hash=file_hash, user_id=uid)
     db.add(doc)
     await db.flush()
     log.info("[pipeline] document saved | id=%s", doc.id)
@@ -129,6 +132,7 @@ async def ingest_document(
             vector=vector,
             payload={
                 "document_id": str(doc.id),
+                "user_id": user_id,
                 "chunk_index": chunk.chunk_index,
                 "page_number": chunk.page_number,
                 "text": chunk.text,

@@ -83,7 +83,7 @@ async def retriever_node(state: AgentState) -> dict:
 
         for sq in sub_queries:
             sq_chunks, _ = await _retriever.retrieve(
-                sq, db=state["db"], top_k=5, domain=state["domain"]
+                sq, db=state["db"], top_k=5, domain=state["domain"], user_id=state.get("user_id")
             )
             for c in sq_chunks:
                 key = f"{c.document_id}_{c.chunk_index}"
@@ -97,7 +97,7 @@ async def retriever_node(state: AgentState) -> dict:
 
     log.info("[retriever] running hybrid retrieval...")
     chunks, best_dense_score = await _retriever.retrieve(
-        state["query"], db=state["db"], top_k=5, domain=state["domain"]
+        state["query"], db=state["db"], top_k=5, domain=state["domain"], user_id=state.get("user_id")
     )
     log.info("[retriever] found %d chunks | best_dense=%.3f", len(chunks), best_dense_score)
     return {"chunks": chunks}
@@ -136,7 +136,7 @@ def web_search_node(state: AgentState) -> dict:
     log.info("[web_search] using %d web results as context", len(web_chunks))
 
     # Fire-and-forget: ingest web content into KB in background
-    _trigger_background_ingest(results, domain=state.get("domain"))
+    _trigger_background_ingest(results, domain=state.get("domain"), user_id=state.get("user_id"))
 
     return {
         "chunks": web_chunks,
@@ -146,7 +146,7 @@ def web_search_node(state: AgentState) -> dict:
     }
 
 
-def _trigger_background_ingest(results: list[dict], domain: str | None) -> None:
+def _trigger_background_ingest(results: list[dict], domain: str | None, user_id: str | None = None) -> None:
     """Queue web content for KB ingestion via Celery."""
     try:
         from backend.workers.tasks import ingest_text_task
@@ -157,6 +157,7 @@ def _trigger_background_ingest(results: list[dict], domain: str | None) -> None:
                     title=r.get("title", "Web Result"),
                     source_url=r.get("url", ""),
                     domain=domain,
+                    user_id=user_id,
                 )
         log.info("[web_search] queued %d results for background ingestion", len(results))
     except Exception as exc:
