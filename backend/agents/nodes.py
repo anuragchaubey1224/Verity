@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from collections.abc import Generator
 
 log = logging.getLogger("verity.agent")
@@ -260,13 +261,25 @@ def stream_generator_node(state: AgentState) -> Generator[str, None, dict]:
         domain=state.get("domain"),
     )
 
-    stream = _llm.chat.completions.create(**provider_kwargs(),
-        model=settings.llm_model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=4096,
-        stream=True,
-    )
+    # Retry the initial call — free OpenRouter models are often transiently
+    # rate-limited (429); a retry may route to a less-congested provider.
+    stream = None
+    for attempt in range(3):
+        try:
+            stream = _llm.chat.completions.create(**provider_kwargs(),
+                model=settings.llm_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=4096,
+                stream=True,
+            )
+            break
+        except Exception as exc:
+            if attempt < 2:
+                log.warning("[generator:stream] LLM call failed (attempt %d/3), retrying: %s", attempt + 1, exc)
+                time.sleep(2)
+            else:
+                raise
 
     for chunk in stream:
         token = chunk.choices[0].delta.content or ""

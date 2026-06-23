@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -23,6 +24,7 @@ _retriever = HybridRetriever()
 _stream_retriever = HybridRetriever(use_hyde=False, use_graph=False)
 _assembler = ContextAssembler()
 _thread_pool = ThreadPoolExecutor(max_workers=2)
+log = logging.getLogger("verity.api")
 
 _DOMAIN_LABELS = {
     "ml": "Machine Learning / AI",
@@ -303,9 +305,20 @@ async def query_stream(request: QueryRequest, req: Request, db: AsyncSession = D
             "web_sources": [], "sources": [],
         }
         full_answer = ""
-        for token in stream_generator_node(gen_state):
-            full_answer += token
-            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+        try:
+            for token in stream_generator_node(gen_state):
+                full_answer += token
+                yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+        except Exception as gen_err:
+            log.warning("[stream] generation failed: %s", gen_err)
+            err_str = str(gen_err)
+            if "429" in err_str or "rate" in err_str.lower():
+                msg = "The model is rate-limited right now (free tier). Please retry in ~30 seconds."
+            else:
+                msg = "Answer generation failed. Please try again."
+            yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
+            yield "data: {\"type\": \"done\"}\n\n"
+            return
 
         # Hallucination check skipped in stream path (saves ~6s after generation)
         has_hallucination = False
