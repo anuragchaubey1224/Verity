@@ -1,8 +1,12 @@
 """
-Run RAGAS evaluation on a golden question set.
+LLM-as-judge evaluation — compares retrieval WITHOUT vs WITH the cross-encoder
+reranker on a small golden question set.
 
 Usage:
     python -m scripts.run_eval
+
+Requires a populated knowledge base (ingest a few RAG papers first, e.g.
+`python -m scripts.arxiv_ingest --query "retrieval augmented generation" --max 5 --domain ml`).
 """
 
 import asyncio
@@ -13,8 +17,11 @@ from datetime import datetime, timezone
 from backend.db.postgres import AsyncSessionLocal
 from backend.evaluation.evaluator import RAGEvaluator
 from backend.evaluation.schemas import EvalSample
+from backend.retrieval.hybrid_retriever import HybridRetriever
 
-# Golden dataset — manually written ground truth answers
+METRICS = ["faithfulness", "answer_relevancy", "context_recall", "context_precision"]
+
+# Golden dataset — manually written ground-truth answers.
 EVAL_SAMPLES = [
     EvalSample(
         question="What is RAG and how does it work?",
@@ -53,50 +60,57 @@ EVAL_SAMPLES = [
 ]
 
 
+def _averages(results) -> dict:
+    acc = {m: [] for m in METRICS}
+    for r in results:
+        summary = r.summary()
+        for m in METRICS:
+            if summary[m] is not None:
+                acc[m].append(summary[m])
+    return {m: (round(sum(v) / len(v), 4) if v else None) for m, v in acc.items()}
+
+
+async def _run_config(name: str, retriever: HybridRetriever, db) -> dict:
+    print(f"\n--- {name} ---")
+    results = await RAGEvaluator(retriever).run(EVAL_SAMPLES, db=db)
+    avg = _averages(results)
+    for m in METRICS:
+        print(f"  {m:<20} {avg[m]}")
+    return avg
+
+
 async def main() -> None:
     os.makedirs("reports", exist_ok=True)
+    print(f"\nEvaluating {len(EVAL_SAMPLES)} samples — baseline vs reranker...")
 
-    print(f"\nRunning RAGAS evaluation on {len(EVAL_SAMPLES)} samples...\n")
-    evaluator = RAGEvaluator()
-
+    configs = [
+        ("baseline", HybridRetriever(use_hyde=False, use_graph=False, use_rerank=False)),
+        ("reranker", HybridRetriever(use_hyde=False, use_graph=False, use_rerank=True)),
+    ]
+    scores = {}
     async with AsyncSessionLocal() as db:
-        results = await evaluator.run(EVAL_SAMPLES, db=db)
+        for name, retriever in configs:
+            scores[name] = await _run_config(name, retriever, db)
 
-    print("\nRAGAS Evaluation Results")
-    print("=" * 60)
-
-    all_scores = {"faithfulness": [], "answer_relevancy": [], "context_recall": [], "context_precision": []}
-
-    report_rows = []
-    for sample, result in zip(EVAL_SAMPLES, results):
-        summary = result.summary()
-        print(f"\nQ: {sample.question}")
-        for metric, score in summary.items():
-            print(f"  {metric:<30} {score}")
-            if score is not None:
-                all_scores[metric].append(score)
-
-        report_rows.append({"question": sample.question, **summary})
-
+    # Comparison table
     print("\n" + "=" * 60)
-    print("Averages:")
-    averages = {}
-    for metric, values in all_scores.items():
-        avg = round(sum(values) / len(values), 4) if values else None
-        averages[metric] = avg
-        print(f"  {metric:<30} {avg}")
+    print(f"{'metric':<22}{'baseline':<12}{'reranker':<12}{'delta':<10}")
+    print("-" * 60)
+    base, rer = scores["baseline"], scores["reranker"]
+    for m in METRICS:
+        b, r = base[m], rer[m]
+        delta = f"{r - b:+.4f}" if (b is not None and r is not None) else "—"
+        print(f"{m:<22}{str(b):<12}{str(r):<12}{delta:<10}")
 
     report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "averages": averages,
-        "samples": report_rows,
+        "samples": len(EVAL_SAMPLES),
+        "baseline": base,
+        "reranker": rer,
     }
-
-    report_path = "reports/eval_report.json"
-    with open(report_path, "w", encoding="utf-8") as f:
+    with open("reports/eval_report.json", "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
-
-    print(f"\nReport saved → {report_path}")
+    print(f"\nReport saved → reports/eval_report.json")
 
 
 if __name__ == "__main__":
