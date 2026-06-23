@@ -19,10 +19,12 @@ ENV HOME=/home/user \
     HF_HOME=/home/user/app/.cache/hf
 
 WORKDIR /home/user/app
-COPY --chown=user . .
 
-# Bake the embedding model into the image so cold starts don't re-download it.
+# Bake the embedding model BEFORE copying app code so this layer stays cached
+# across code changes — faster auto-deploys, no re-download each push.
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')" || true
+
+COPY --chown=user . .
 
 EXPOSE 7860
 CMD ["bash", "deploy/hf/start.sh"]

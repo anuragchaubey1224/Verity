@@ -48,6 +48,16 @@ class Settings(BaseSettings):
         description="Output dimension of the embedding model — must match Qdrant collection size"
     )
 
+    # Ingestion — LLM-heavy steps, OFF by default for fast ingestion
+    enable_entity_extraction: bool = Field(
+        default=False,
+        description="Per-chunk LLM entity extraction for graph retrieval (many LLM calls — slow)"
+    )
+    enable_image_description: bool = Field(
+        default=False,
+        description="Vision-LLM descriptions for PDF figures (slow; needs vision-model credit)"
+    )
+
     # Langfuse (optional — leave empty to disable tracing)
     langfuse_public_key: str | None = Field(default=None, description="Langfuse public key for LLM tracing")
     langfuse_secret_key: str | None = Field(default=None, description="Langfuse secret key")

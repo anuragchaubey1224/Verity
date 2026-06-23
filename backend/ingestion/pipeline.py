@@ -37,7 +37,7 @@ def _detect_type(source: str) -> str:
 
 def _get_parser(doc_type: str) -> BaseParser:
     match doc_type:
-        case "pdf":  return PDFParser()
+        case "pdf":  return PDFParser(extract_images=settings.enable_image_description)
         case "docx": return DOCXParser()
         case "web":  return WebParser()
         case _:      return TXTParser()
@@ -122,7 +122,7 @@ async def ingest_document(
 
     for chunk, vector in zip(text_chunks, vectors):
         qdrant_id = str(uuid.uuid4())
-        entities = extract_entities(chunk.text)
+        entities = extract_entities(chunk.text) if settings.enable_entity_extraction else []
 
         qdrant_points.append(PointStruct(
             id=qdrant_id,
