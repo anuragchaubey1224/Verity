@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.config import settings
 from backend.retrieval.dense_retriever import DenseRetriever, RetrievedChunk
 from backend.retrieval.sparse_retriever import SparseRetriever
 from backend.retrieval.hyde import generate_hypothetical_document
@@ -36,11 +37,12 @@ def _reciprocal_rank_fusion(
 
 
 class HybridRetriever:
-    def __init__(self, use_hyde: bool = True, use_graph: bool = True):
+    def __init__(self, use_hyde: bool = True, use_graph: bool = True, use_rerank: bool | None = None):
         self.dense = DenseRetriever()
         self.sparse = SparseRetriever()
         self.use_hyde = use_hyde
         self.use_graph = use_graph
+        self.use_rerank = settings.enable_reranker if use_rerank is None else use_rerank
 
     async def retrieve(
         self,
@@ -89,7 +91,13 @@ class HybridRetriever:
                 log.info("[hybrid] graph=%d chunks added", len(graph_results))
 
         fused = _reciprocal_rank_fusion(results_to_fuse)
-        final = fused[:top_k]
 
-        log.info("[hybrid] final %d chunks ready | best_dense=%.3f", len(final), best_dense_score)
+        if self.use_rerank and fused:
+            from backend.retrieval.reranker import rerank
+            final = rerank(query, fused[:settings.rerank_candidates], top_k)
+        else:
+            final = fused[:top_k]
+
+        log.info("[hybrid] final %d chunks ready | best_dense=%.3f | rerank=%s",
+                 len(final), best_dense_score, self.use_rerank)
         return final, best_dense_score

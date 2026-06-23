@@ -20,9 +20,10 @@ ENV HOME=/home/user \
 
 WORKDIR /home/user/app
 
-# Bake the embedding model BEFORE copying app code so this layer stays cached
-# across code changes — faster auto-deploys, no re-download each push.
+# Bake the embedding + reranker models BEFORE copying app code so this layer
+# stays cached across code changes — faster auto-deploys, no re-download.
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')" || true
+RUN python -c "from fastembed.rerank.cross_encoder import TextCrossEncoder; TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2')" || true
 
 COPY --chown=user . .
 

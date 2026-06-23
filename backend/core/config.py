@@ -58,6 +58,20 @@ class Settings(BaseSettings):
         description="Vision-LLM descriptions for PDF figures (slow; needs vision-model credit)"
     )
 
+    # Retrieval — cross-encoder reranking (ONNX via fastembed, torch-free)
+    enable_reranker: bool = Field(
+        default=True,
+        description="Rerank RRF-fused candidates with a cross-encoder before final top-k"
+    )
+    reranker_model: str = Field(
+        default="Xenova/ms-marco-MiniLM-L-6-v2",
+        description="fastembed cross-encoder reranker model"
+    )
+    rerank_candidates: int = Field(
+        default=30,
+        description="How many fused candidates to rerank before taking top_k"
+    )
+
     # Langfuse (optional — leave empty to disable tracing)
     langfuse_public_key: str | None = Field(default=None, description="Langfuse public key for LLM tracing")
     langfuse_secret_key: str | None = Field(default=None, description="Langfuse secret key")
