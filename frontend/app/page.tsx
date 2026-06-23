@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
   queryKBStream, fetchSessions, fetchSessionMessages,
   RateLimitError, type PipelineInfo, type SourceItem, type SessionItem,
 } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 
 const DOMAINS = [
   { value: "all", label: "All Domains", icon: "◈" },
@@ -35,18 +37,7 @@ interface Message {
   pipeline?: PipelineInfo
 }
 
-function randomId() {
-  return Math.random().toString(36).slice(2, 10)
-}
-
-function getUserId(): string {
-  let uid = localStorage.getItem("ros_user_id")
-  if (!uid) {
-    uid = randomId() + randomId()  // 16-char permanent user token
-    localStorage.setItem("ros_user_id", uid)
-  }
-  return uid
-}
+// Session ids are random UUIDs; user identity comes from the auth token.
 
 function timeAgo(isoStr: string | null): string {
   if (!isoStr) return ""
@@ -60,6 +51,8 @@ function timeAgo(isoStr: string | null): string {
 }
 
 export default function ChatPage() {
+  const { user, loading: authLoading, logout } = useAuth()
+  const router = useRouter()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [domain, setDomain] = useState("all")
@@ -74,15 +67,17 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  // Gate the page behind auth.
   useEffect(() => {
-    const uid = getUserId()
-    const stored = localStorage.getItem("ros_session_id")
-    // Ensure stored session belongs to this user
-    const id = (stored && stored.startsWith(uid + "_")) ? stored : `${uid}_${randomId()}`
-    localStorage.setItem("ros_session_id", id)
-    setSessionId(id)
-    fetchSessions(uid).then(setSessions).catch(() => {})
-  }, [])
+    if (!authLoading && !user) router.replace("/login")
+  }, [authLoading, user, router])
+
+  // Once authenticated: fresh session + load this user's past chats.
+  useEffect(() => {
+    if (!user) return
+    setSessionId(crypto.randomUUID())
+    fetchSessions().then(setSessions).catch(() => {})
+  }, [user])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -93,7 +88,7 @@ export default function ChatPage() {
   }, [])
 
   async function refreshSessions() {
-    try { setSessions(await fetchSessions(getUserId())) } catch { /* non-critical */ }
+    try { setSessions(await fetchSessions()) } catch { /* non-critical */ }
   }
 
   async function loadSession(id: string) {
@@ -104,16 +99,13 @@ export default function ChatPage() {
       const msgs = await fetchSessionMessages(id)
       setMessages(msgs.map(m => ({ role: m.role, content: m.content })))
       setSessionId(id)
-      localStorage.setItem("ros_session_id", id)
     } catch {
       setError("Failed to load session")
     }
   }
 
   function startNewChat() {
-    const id = `${getUserId()}_${randomId()}`
-    localStorage.setItem("ros_session_id", id)
-    setSessionId(id)
+    setSessionId(crypto.randomUUID())
     setMessages([])
     setError(null)
     setShowSources({})
@@ -200,6 +192,13 @@ export default function ChatPage() {
     setShowSources(prev => ({ ...prev, [idx]: !prev[idx] }))
   }
 
+  if (authLoading || !user) {
+    return (
+      <div className="flex h-screen items-center justify-center"
+        style={{ background: "var(--background)", color: "var(--muted-foreground)" }}>Loading…</div>
+    )
+  }
+
   return (
     <div className="flex h-screen" style={{ background: "var(--background)", color: "var(--foreground)" }}>
 
@@ -280,7 +279,7 @@ export default function ChatPage() {
         </div>
 
         {/* Bottom actions */}
-        <div className="px-3 pb-4 pt-3" style={{ borderTop: "1px solid var(--sidebar-border)" }}>
+        <div className="px-3 pb-4 pt-3 space-y-1" style={{ borderTop: "1px solid var(--sidebar-border)" }}>
           <Link href="/ingest" className="block">
             <button
               className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm transition-all duration-150"
@@ -292,6 +291,10 @@ export default function ChatPage() {
               Upload Document
             </button>
           </Link>
+          <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs">
+            <span className="truncate" title={user.email} style={{ color: "var(--muted-foreground)" }}>{user.email}</span>
+            <button onClick={logout} className="shrink-0 font-medium" style={{ color: "#e57373" }}>Log out</button>
+          </div>
         </div>
       </aside>
 

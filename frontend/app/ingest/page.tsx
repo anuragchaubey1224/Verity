@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { getTaskStatus, ingestAsync, uploadFile } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 
 const DOMAINS = [
   { value: "ml", label: "ML / AI" },
@@ -21,6 +23,8 @@ interface IngestResult {
 }
 
 export default function IngestPage() {
+  const { user, loading: authLoading } = useAuth()
+  const router = useRouter()
   const [title, setTitle] = useState("")
   const [domain, setDomain] = useState("ml")
   const [loading, setLoading] = useState(false)
@@ -35,6 +39,10 @@ export default function IngestPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  useEffect(() => {
+    if (!authLoading && !user) router.replace("/login")
+  }, [authLoading, user, router])
 
   function startPolling(taskId: string) {
     pollRef.current = setInterval(async () => {
@@ -84,6 +92,13 @@ export default function IngestPage() {
   }
 
   const currentStatus = taskStatus ?? result?.status ?? ""
+
+  if (authLoading || !user) {
+    return (
+      <div className="flex h-screen items-center justify-center"
+        style={{ background: "var(--background)", color: "var(--muted-foreground)" }}>Loading…</div>
+    )
+  }
 
   return (
     <div className="flex h-screen" style={{ background: "var(--background)", color: "var(--foreground)" }}>

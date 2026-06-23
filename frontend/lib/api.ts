@@ -1,4 +1,18 @@
+import { clearToken, getToken } from "./auth"
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+
+function authHeaders(extra?: HeadersInit): HeadersInit {
+  const token = getToken()
+  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra }
+}
+
+function handleUnauthorized() {
+  clearToken()
+  if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+    window.location.href = "/login"
+  }
+}
 
 export interface QueryRequest {
   query: string
@@ -48,7 +62,11 @@ export interface TaskStatusResponse {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, init)
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers: authHeaders(init?.headers) })
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error("Unauthorized")
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     throw new Error(text)
@@ -103,10 +121,15 @@ export async function queryKBStream(
   try {
     const res = await fetch(`${API_BASE}/research/query/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(req),
       signal: controller.signal,
     })
+
+    if (res.status === 401) {
+      handleUnauthorized()
+      throw new Error("Unauthorized")
+    }
 
     if (res.status === 429) {
       const data = await res.json().catch(() => ({}))
@@ -179,8 +202,8 @@ export interface SessionMessage {
   content: string
 }
 
-export function fetchSessions(userId: string): Promise<SessionItem[]> {
-  return request(`/research/sessions?user_id=${encodeURIComponent(userId)}`)
+export function fetchSessions(): Promise<SessionItem[]> {
+  return request("/research/sessions")
 }
 
 export function fetchSessionMessages(sessionId: string): Promise<SessionMessage[]> {
@@ -192,10 +215,54 @@ export async function uploadFile(file: File, title: string, domain: string): Pro
   form.append("file", file)
   form.append("title", title)
   form.append("domain", domain)
-  const res = await fetch(`${API_BASE}/research/upload`, { method: "POST", body: form })
+  const res = await fetch(`${API_BASE}/research/upload`, {
+    method: "POST",
+    headers: authHeaders(),  // no Content-Type — browser sets the multipart boundary
+    body: form,
+  })
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error("Unauthorized")
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     throw new Error(text)
   }
   return res.json()
+}
+
+// ── Auth ──
+export interface TokenResponse {
+  access_token: string
+  token_type: string
+}
+
+export async function register(email: string, password: string): Promise<TokenResponse> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(typeof data?.detail === "string" ? data.detail : "Registration failed")
+  }
+  return res.json()
+}
+
+export async function login(email: string, password: string): Promise<TokenResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(typeof data?.detail === "string" ? data.detail : "Login failed")
+  }
+  return res.json()
+}
+
+export function getMe(): Promise<{ id: string; email: string }> {
+  return request("/auth/me")
 }
