@@ -90,5 +90,12 @@ class Settings(BaseSettings):
         description="Comma-separated allowed CORS origins (frontend URLs)"
     )
 
+    # Auth (JWT) — required; generate with: openssl rand -hex 32
+    jwt_secret_key: str = Field(description="Secret for signing JWT access tokens")
+    jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
+    access_token_expire_minutes: int = Field(
+        default=10080, description="Access token lifetime in minutes (default 7 days)"
+    )
+
 
 settings = Settings()
