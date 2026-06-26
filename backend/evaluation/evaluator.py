@@ -28,10 +28,13 @@ from backend.retrieval.hybrid_retriever import HybridRetriever
 log = logging.getLogger("verity.evaluation")
 
 
+# NOTE: braces in the JSON example are doubled ({{ }}) because every metric prompt
+# below is built by concatenating this preamble and then calling str.format() on it.
+# Single braces here would be parsed as format fields and raise KeyError: '"score"'.
 _JUDGE_PREAMBLE = (
     "You are a strict, impartial evaluator of a retrieval-augmented QA system. "
     "Score the metric below from 0.0 (worst) to 1.0 (best). "
-    'Respond with ONLY a JSON object: {"score": <number 0..1>, "reason": "<one sentence>"}.'
+    'Respond with ONLY a JSON object: {{"score": <number 0..1>, "reason": "<one sentence>"}}.'
 )
 
 _FAITHFULNESS = _JUDGE_PREAMBLE + (
