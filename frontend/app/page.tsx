@@ -1,15 +1,17 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import Link from "next/link"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
-  queryKBStream, fetchSessions, fetchSessionMessages, uploadFile,
+  queryKBStream, fetchSessions, fetchSessionMessages,
   RateLimitError, type PipelineInfo, type SourceItem, type SessionItem,
 } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
+import { UploadModal } from "@/components/upload-modal"
+
+const SESSION_TITLES_KEY = "verity_session_titles"
 
 const DOMAINS = [
   { value: "all", label: "All Domains", icon: "◈" },
@@ -66,9 +68,17 @@ export default function ChatPage() {
   const rateLimitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [uploading, setUploading] = useState(false)
-  const [uploadNotice, setUploadNotice] = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [uploadModalOpen, setUploadModalOpen] = useState(false)
+  // sessionId → custom chat title (set when a paper is uploaded). Persisted
+  // locally because the backend names a chat after its first user message.
+  // Lazy-initialised from localStorage (client-only) to avoid a mount effect.
+  const [sessionTitles, setSessionTitles] = useState<Record<string, string>>(() => {
+    if (typeof window === "undefined") return {}
+    try {
+      const raw = localStorage.getItem(SESSION_TITLES_KEY)
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
 
   // Gate the page behind auth.
   useEffect(() => {
@@ -89,13 +99,6 @@ export default function ChatPage() {
   useEffect(() => () => {
     if (rateLimitTimerRef.current) clearInterval(rateLimitTimerRef.current)
   }, [])
-
-  // Auto-dismiss a successful upload notice after a few seconds.
-  useEffect(() => {
-    if (uploadNotice?.type !== "success") return
-    const t = setTimeout(() => setUploadNotice(null), 6000)
-    return () => clearTimeout(t)
-  }, [uploadNotice])
 
   async function refreshSessions() {
     try { setSessions(await fetchSessions()) } catch { /* non-critical */ }
@@ -122,22 +125,28 @@ export default function ChatPage() {
     setExpandedChunk(null)
   }
 
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ""  // reset so the same file can be picked again
-    if (!file || uploading) return
-    setUploadNotice(null)
-    setUploading(true)
-    const docTitle = file.name.replace(/\.[^.]+$/, "")
-    try {
-      // "all" is a query-time filter, not a real ingest tag — default uploads to "ml".
-      await uploadFile(file, docTitle, domain === "all" ? "ml" : domain)
-      setUploadNotice({ type: "success", text: `"${file.name}" indexed — you can ask about it now.` })
-    } catch (err) {
-      setUploadNotice({ type: "error", text: err instanceof Error ? err.message : "Upload failed" })
-    } finally {
-      setUploading(false)
-    }
+  function nameSession(id: string, title: string) {
+    setSessionTitles(prev => {
+      const next = { ...prev, [id]: title }
+      try { localStorage.setItem(SESSION_TITLES_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
+  }
+
+  // Called by the upload modal after a successful upload: start a fresh chat
+  // named after the paper and seed it with an intro so the user can discuss it.
+  function handleUploaded(paperTitle: string) {
+    const id = crypto.randomUUID()
+    nameSession(id, paperTitle)
+    setSessionId(id)
+    setMessages([{
+      role: "assistant",
+      content: `📄 **${paperTitle}** is indexed and ready. Ask me anything about it.`,
+    }])
+    setError(null)
+    setShowSources({})
+    setExpandedChunk(null)
+    setUploadModalOpen(false)
   }
 
   async function handleSubmit(query?: string) {
@@ -220,6 +229,16 @@ export default function ChatPage() {
     setShowSources(prev => ({ ...prev, [idx]: !prev[idx] }))
   }
 
+  // Surface a freshly-created upload chat in the sidebar before it has any
+  // backend messages, and prefer a custom title wherever one exists.
+  const displaySessions = useMemo<SessionItem[]>(() => {
+    const list = [...sessions]
+    if (sessionId && sessionTitles[sessionId] && !list.some(s => s.session_id === sessionId)) {
+      list.unshift({ session_id: sessionId, preview: sessionTitles[sessionId], last_at: null, message_count: 0 })
+    }
+    return list
+  }, [sessions, sessionId, sessionTitles])
+
   if (authLoading || !user) {
     return (
       <div className="flex h-screen items-center justify-center"
@@ -266,7 +285,7 @@ export default function ChatPage() {
 
         {/* Chat history list */}
         <div className="flex-1 overflow-y-auto py-3">
-          {sessions.length === 0 ? (
+          {displaySessions.length === 0 ? (
             <p className="px-4 text-xs" style={{ color: "var(--muted-foreground)" }}>No chats yet</p>
           ) : (
             <>
@@ -274,7 +293,7 @@ export default function ChatPage() {
                 Recent
               </p>
               <div className="flex flex-col gap-0.5 px-2">
-                {sessions.map(s => {
+                {displaySessions.map(s => {
                   const active = s.session_id === sessionId
                   return (
                     <button
@@ -293,7 +312,7 @@ export default function ChatPage() {
                       }}
                     >
                       <p className="truncate leading-tight font-medium" style={{ color: active ? "#4f8ef7" : "var(--foreground)" }}>
-                        {s.preview || "Empty chat"}
+                        {sessionTitles[s.session_id] || s.preview || "Empty chat"}
                       </p>
                       <p className="mt-0.5" style={{ color: "var(--muted-foreground)" }}>
                         {timeAgo(s.last_at)}
@@ -308,17 +327,6 @@ export default function ChatPage() {
 
         {/* Bottom actions */}
         <div className="px-3 pb-4 pt-3 space-y-1" style={{ borderTop: "1px solid var(--sidebar-border)" }}>
-          <Link href="/ingest" className="block">
-            <button
-              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm transition-all duration-150"
-              style={{ color: "var(--sidebar-foreground)" }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)" }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "" }}
-            >
-              <span className="text-lg leading-none" style={{ color: "#4f8ef7" }}>+</span>
-              Upload Document
-            </button>
-          </Link>
           <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs">
             <span className="truncate" title={user.email} style={{ color: "var(--muted-foreground)" }}>{user.email}</span>
             <button onClick={logout} className="shrink-0 font-medium" style={{ color: "#e57373" }}>Log out</button>
@@ -564,41 +572,22 @@ export default function ChatPage() {
         {/* Input bar */}
         <div className="shrink-0 px-4 py-4" style={{ borderTop: "1px solid var(--border)", background: "var(--sidebar)" }}>
           <div className="max-w-3xl mx-auto">
-            {uploadNotice && (
-              <div className="mb-2 flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm"
-                style={uploadNotice.type === "success"
-                  ? { background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.25)", color: "#34d399" }
-                  : { background: "rgba(229,87,87,0.1)", border: "1px solid rgba(229,87,87,0.25)", color: "#e57373" }}
-              >
-                <span>{uploadNotice.type === "success" ? "✓" : "⚠"}</span>
-                <span className="flex-1">{uploadNotice.text}</span>
-                <button onClick={() => setUploadNotice(null)} className="shrink-0 opacity-60 hover:opacity-100" style={{ color: "inherit" }}>✕</button>
-              </div>
-            )}
             <div className="flex gap-3 items-end px-4 py-3 rounded-2xl"
               style={{ background: "var(--card)", border: "1px solid var(--border)", boxShadow: "0 4px 24px rgba(0,0,0,0.3)" }}
             >
-              {/* Hidden file input — triggered by the attach button */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.txt,.md,.docx"
-                className="hidden"
-                onChange={handleFileUpload}
-              />
-              {/* Attach / upload document button */}
+              {/* Attach / upload document button — opens the upload modal */}
               <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || loading}
+                onClick={() => setUploadModalOpen(true)}
+                disabled={loading}
                 title="Upload a document (PDF, DOCX, TXT, MD)"
                 className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-150"
                 style={{
-                  color: uploading ? "#4f8ef7" : "var(--muted-foreground)",
+                  color: "var(--muted-foreground)",
                   border: "1px solid var(--border)",
-                  cursor: uploading || loading ? "not-allowed" : "pointer",
+                  cursor: loading ? "not-allowed" : "pointer",
                 }}
                 onMouseEnter={e => {
-                  if (uploading || loading) return
+                  if (loading) return
                   const el = e.currentTarget as HTMLElement
                   el.style.background = "rgba(79,142,247,0.12)"
                   el.style.color = "#4f8ef7"
@@ -607,18 +596,14 @@ export default function ChatPage() {
                 onMouseLeave={e => {
                   const el = e.currentTarget as HTMLElement
                   el.style.background = ""
-                  el.style.color = uploading ? "#4f8ef7" : "var(--muted-foreground)"
+                  el.style.color = "var(--muted-foreground)"
                   el.style.borderColor = "var(--border)"
                 }}
               >
-                {uploading ? (
-                  <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                  </svg>
-                )}
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
               </button>
               <textarea
                 ref={textareaRef}
@@ -661,6 +646,14 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+
+      {uploadModalOpen && (
+        <UploadModal
+          defaultDomain={domain}
+          onClose={() => setUploadModalOpen(false)}
+          onUploaded={handleUploaded}
+        />
+      )}
     </div>
   )
 }
