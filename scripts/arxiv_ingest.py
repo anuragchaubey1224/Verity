@@ -66,6 +66,9 @@ async def ingest_papers(papers: list[dict], domain: str | None) -> None:
                 )
                 print(f"           done | id={doc.id} | status={doc.status}")
             except Exception as e:
+                # Reset the session so one bad paper doesn't poison the rest
+                # (a failed flush leaves the transaction un-usable until rollback).
+                await db.rollback()
                 print(f"           failed: {e}")
 
 

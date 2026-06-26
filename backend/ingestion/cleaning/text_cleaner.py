@@ -15,6 +15,11 @@ _REFERENCE_LINE = re.compile(r"^\s*\[\d+\]")
 _ORCID = re.compile(r"orcid\.org", re.IGNORECASE)
 _URL_ONLY_LINE = re.compile(r"^\s*https?://\S+\s*$")
 
+# C0/DEL control characters except tab (\x09), newline (\x0a), carriage return (\x0d).
+# PDF text extraction can emit these (notably NUL \x00), and PostgreSQL's TEXT type
+# rejects NUL bytes outright — strip them before anything touches the DB.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 # Section headings that signal non-content (truncate everything after these)
 _NOISE_SECTION_HEADING = re.compile(
     r"^(references|bibliography|acknowledgments?|acknowledgements?|"
@@ -29,9 +34,13 @@ _NOISE_SECTION_HEADING = re.compile(
 def clean_page_text(text: str) -> str:
     """Clean a full page of text before chunking.
 
+    - Strips control characters (incl. NUL) that PostgreSQL TEXT rejects
     - Truncates at references / acknowledgments / bibliography headings
     - Removes email lines, DOI lines, copyright lines, page numbers
     """
+    # Strip DB-hostile control bytes first (NUL etc. from PDF extraction)
+    text = _CONTROL_CHARS.sub("", text)
+
     # Truncate at noise section headings
     match = _NOISE_SECTION_HEADING.search(text)
     if match:

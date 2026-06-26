@@ -79,6 +79,8 @@ async def reingest_all(domain: str | None) -> None:
                 )
                 print(f"           ok | id={doc.id} | status={doc.status}")
             except Exception as exc:
+                # Reset the session so one bad PDF doesn't poison the rest.
+                await db.rollback()
                 print(f"           FAILED: {exc}")
 
     print(f"  [ingest] done — {len(pdfs)} PDFs processed")
