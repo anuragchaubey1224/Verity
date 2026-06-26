@@ -253,4 +253,19 @@ python -m scripts.run_eval
 ```
 
 Prints a baseline-vs-reranker table and writes `reports/eval_report.json`.
-*(Benchmark numbers to be added here.)*
+
+**Results** — 20 hand-curated Q/A pairs over a 13-paper RAG corpus
+(1,069 chunks), judged by Llama 3.3 70B:
+
+| Metric | Baseline (RRF) | + Cross-Encoder Reranker | Δ |
+|--------|:--------------:|:------------------------:|:---:|
+| Context Recall | 0.32 | **0.45** | **+41%** |
+| Context Precision | 0.63 | **0.73** | **+16%** |
+| Faithfulness | 0.865 | **0.89** | +3% |
+| Answer Relevancy | 0.97 | 0.97 | — |
+
+The cross-encoder reranker delivers its largest gains exactly where expected —
+**retrieval quality** (recall +41%, precision +16%) — by rescoring RRF-fused
+candidates on joint query–document relevance. Answer relevancy is already at
+ceiling, so the lift shows up in the retrieval-side metrics. (Δ shown as relative
+change; deltas vary run-to-run since the judge is an LLM.)
