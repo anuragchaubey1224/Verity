@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
-  queryKBStream, fetchSessions, fetchSessionMessages,
+  queryKBStream, fetchSessions, fetchSessionMessages, uploadFile,
   RateLimitError, type PipelineInfo, type SourceItem, type SessionItem,
 } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
@@ -66,6 +66,9 @@ export default function ChatPage() {
   const rateLimitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadNotice, setUploadNotice] = useState<{ type: "success" | "error"; text: string } | null>(null)
 
   // Gate the page behind auth.
   useEffect(() => {
@@ -86,6 +89,13 @@ export default function ChatPage() {
   useEffect(() => () => {
     if (rateLimitTimerRef.current) clearInterval(rateLimitTimerRef.current)
   }, [])
+
+  // Auto-dismiss a successful upload notice after a few seconds.
+  useEffect(() => {
+    if (uploadNotice?.type !== "success") return
+    const t = setTimeout(() => setUploadNotice(null), 6000)
+    return () => clearTimeout(t)
+  }, [uploadNotice])
 
   async function refreshSessions() {
     try { setSessions(await fetchSessions()) } catch { /* non-critical */ }
@@ -110,6 +120,24 @@ export default function ChatPage() {
     setError(null)
     setShowSources({})
     setExpandedChunk(null)
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ""  // reset so the same file can be picked again
+    if (!file || uploading) return
+    setUploadNotice(null)
+    setUploading(true)
+    const docTitle = file.name.replace(/\.[^.]+$/, "")
+    try {
+      // "all" is a query-time filter, not a real ingest tag — default uploads to "ml".
+      await uploadFile(file, docTitle, domain === "all" ? "ml" : domain)
+      setUploadNotice({ type: "success", text: `"${file.name}" indexed — you can ask about it now.` })
+    } catch (err) {
+      setUploadNotice({ type: "error", text: err instanceof Error ? err.message : "Upload failed" })
+    } finally {
+      setUploading(false)
+    }
   }
 
   async function handleSubmit(query?: string) {
@@ -536,9 +564,62 @@ export default function ChatPage() {
         {/* Input bar */}
         <div className="shrink-0 px-4 py-4" style={{ borderTop: "1px solid var(--border)", background: "var(--sidebar)" }}>
           <div className="max-w-3xl mx-auto">
+            {uploadNotice && (
+              <div className="mb-2 flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm"
+                style={uploadNotice.type === "success"
+                  ? { background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.25)", color: "#34d399" }
+                  : { background: "rgba(229,87,87,0.1)", border: "1px solid rgba(229,87,87,0.25)", color: "#e57373" }}
+              >
+                <span>{uploadNotice.type === "success" ? "✓" : "⚠"}</span>
+                <span className="flex-1">{uploadNotice.text}</span>
+                <button onClick={() => setUploadNotice(null)} className="shrink-0 opacity-60 hover:opacity-100" style={{ color: "inherit" }}>✕</button>
+              </div>
+            )}
             <div className="flex gap-3 items-end px-4 py-3 rounded-2xl"
               style={{ background: "var(--card)", border: "1px solid var(--border)", boxShadow: "0 4px 24px rgba(0,0,0,0.3)" }}
             >
+              {/* Hidden file input — triggered by the attach button */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.txt,.md,.docx"
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+              {/* Attach / upload document button */}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || loading}
+                title="Upload a document (PDF, DOCX, TXT, MD)"
+                className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-150"
+                style={{
+                  color: uploading ? "#4f8ef7" : "var(--muted-foreground)",
+                  border: "1px solid var(--border)",
+                  cursor: uploading || loading ? "not-allowed" : "pointer",
+                }}
+                onMouseEnter={e => {
+                  if (uploading || loading) return
+                  const el = e.currentTarget as HTMLElement
+                  el.style.background = "rgba(79,142,247,0.12)"
+                  el.style.color = "#4f8ef7"
+                  el.style.borderColor = "rgba(79,142,247,0.4)"
+                }}
+                onMouseLeave={e => {
+                  const el = e.currentTarget as HTMLElement
+                  el.style.background = ""
+                  el.style.color = uploading ? "#4f8ef7" : "var(--muted-foreground)"
+                  el.style.borderColor = "var(--border)"
+                }}
+              >
+                {uploading ? (
+                  <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                )}
+              </button>
               <textarea
                 ref={textareaRef}
                 value={input}
