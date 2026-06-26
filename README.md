@@ -72,6 +72,7 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 | Task Queue | Celery + Redis |
 | Tracing | Langfuse (optional, generation span) |
 | Evaluation | LLM-as-judge (faithfulness, relevancy, context recall/precision) |
+| Auth | JWT (bcrypt + HS256), per-user KB isolation |
 | Frontend | Next.js 16 + Tailwind + shadcn/ui |
 | Deployment | Docker Compose · HF Spaces + Vercel (free tier) |
 
@@ -107,6 +108,12 @@ Full flow diagrams → [`Architecture/FLOW_DIAGRAM.md`](Architecture/FLOW_DIAGRA
 - Short-term — in-memory session cache
 - Long-term — Postgres-backed conversation history per session
 
+**Auth & Isolation**
+- JWT authentication (bcrypt + HS256) — register / login / protected routes
+- Per-user knowledge base — every document, chunk and conversation is scoped to its owner
+- In-chat upload — attach a paper from the chat box; it starts a new chat named after it
+- Per-user rate limiting on the streaming query endpoint
+
 ---
 
 ## Roadmap
@@ -136,6 +143,8 @@ pip install -r requirements.txt
 Create `.env` file:
 ```env
 OPENROUTER_API_KEY=sk-or-...
+# Required — signs JWT auth tokens. Generate one with: openssl rand -hex 32
+JWT_SECRET_KEY=replace-with-a-32-byte-hex-secret
 # Ports below match the docker-compose host mappings (5433 / 6380)
 POSTGRES_URL=postgresql+asyncpg://postgres:password@localhost:5433/verity
 QDRANT_URL=http://localhost:6333
@@ -147,6 +156,7 @@ FAST_LLM_MODEL=google/gemma-3-4b-it:free
 TAVILY_API_KEY=
 LANGFUSE_PUBLIC_KEY=
 LANGFUSE_SECRET_KEY=
+CORS_ORIGINS=http://localhost:3000
 ```
 
 **3. Start infrastructure**
@@ -204,11 +214,18 @@ python -m scripts.build_raptor --domain ml
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/research/ingest` | Sync ingest (waits for completion) |
+| POST | `/auth/register` | Create an account → returns JWT |
+| POST | `/auth/login` | Log in → returns JWT |
+| GET | `/auth/me` | Current authenticated user |
+| POST | `/research/upload` | Upload a file (multipart) → ingest into your KB |
+| POST | `/research/ingest` | Sync ingest from a path/URL |
 | POST | `/research/ingest/async` | Async ingest via Celery |
-| GET | `/research/tasks/{id}` | Check task status |
-| POST | `/research/query` | Query knowledge base |
+| GET | `/research/tasks/{id}` | Check async task status |
+| POST | `/research/query` | Query knowledge base (full agentic) |
 | POST | `/research/query/stream` | Streaming query (SSE) |
+| GET | `/research/sessions` | List the user's chat sessions |
+
+All `/research/*` routes require an `Authorization: Bearer <token>` header.
 
 Interactive docs: `http://localhost:8000/docs`
 

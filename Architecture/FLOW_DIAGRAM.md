@@ -219,4 +219,42 @@ flowchart LR
 
     note["Single default queue + one solo worker today.<br/>Priority queues / multi-worker scaling = future work."]
 ```
-</content>
+
+---
+
+## 8. Authentication & Per-User Isolation
+
+> Source of truth: `backend/core/security.py`, `backend/api/dependencies/auth.py`
+
+```mermaid
+flowchart TD
+    A([POST /auth/register or /auth/login]) --> BC[bcrypt hash / verify password]
+    BC --> JWT[Issue HS256 JWT - 7-day expiry]
+    JWT --> CL[Client stores token in localStorage]
+    CL --> REQ[Every /research call sends<br/>Authorization: Bearer token]
+    REQ --> DEP[get_current_user dependency<br/>decode JWT -> user_id]
+    DEP --> SCOPE[Request scoped by user_id]
+    SCOPE --> PG[(Postgres: Document / Chunk / Conversation<br/>filtered by user_id)]
+    SCOPE --> QD[(Qdrant: user_id payload filter)]
+
+    note["Every document, chunk, vector and conversation carries a user_id.<br/>Dense, sparse and graph retrieval all filter on it, so a user only<br/>ever sees their own knowledge base."]
+```
+
+---
+
+## 9. Evaluation Harness — LLM-as-Judge
+
+> Source of truth: `backend/evaluation/evaluator.py`, `scripts/run_eval.py`
+
+```mermaid
+flowchart TD
+    DS[Golden set: 20 Q + ground-truth] --> CFG{Run two configs}
+    CFG --> B[Baseline: RRF, no rerank]
+    CFG --> RR[Reranker: RRF + cross-encoder]
+    B --> RUN[Per question: retrieve then generate answer]
+    RR --> RUN
+    RUN --> J[LLM judge scores 4 metrics 0..1:<br/>faithfulness, answer-relevancy,<br/>context-recall, context-precision]
+    J --> REP[(reports/eval_report.json + comparison table)]
+
+    note["Judge = the same Llama 3.3 70B model. On a 13-paper corpus the<br/>cross-encoder reranker lifts context recall +41% and precision +16%<br/>over the RRF baseline. Full table in the README Evaluation section."]
+```
