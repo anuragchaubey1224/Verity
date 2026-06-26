@@ -349,11 +349,6 @@ export default function ChatPage() {
               <option key={d.value} value={d.value}>{d.icon} {d.label}</option>
             ))}
           </select>
-          {sessionId && (
-            <span className="ml-auto text-xs font-mono" style={{ color: "var(--muted-foreground)", opacity: 0.4 }}>
-              #{sessionId}
-            </span>
-          )}
         </div>
 
         {/* Messages */}
