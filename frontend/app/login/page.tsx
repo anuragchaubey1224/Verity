@@ -37,7 +37,7 @@ export default function LoginPage() {
 
         <div className="flex flex-col items-center gap-3 mb-1">
           <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white text-lg font-bold"
-            style={{ background: "linear-gradient(135deg, #4f8ef7 0%, #7c5df7 100%)" }}>R</div>
+            style={{ background: "linear-gradient(135deg, #4f8ef7 0%, #7c5df7 100%)" }}>V</div>
           <h1 className="text-xl font-semibold">Welcome back</h1>
           <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>Sign in to your Verity workspace</p>
         </div>

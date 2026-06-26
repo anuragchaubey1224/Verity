@@ -257,7 +257,7 @@ export default function ChatPage() {
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold"
               style={{ background: "linear-gradient(135deg, #4f8ef7 0%, #7c5df7 100%)" }}>
-              R
+              V
             </div>
             <span className="font-semibold text-[14px]" style={{ color: "var(--foreground)" }}>Verity</span>
           </div>
@@ -359,7 +359,7 @@ export default function ChatPage() {
               <div className="flex flex-col items-center justify-center min-h-[55vh] text-center select-none">
                 <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-6 text-2xl font-bold text-white"
                   style={{ background: "linear-gradient(135deg, #4f8ef7 0%, #7c5df7 100%)" }}>
-                  R
+                  V
                 </div>
                 <h1 className="text-2xl font-semibold mb-2" style={{ color: "var(--foreground)" }}>
                   What do you want to research?

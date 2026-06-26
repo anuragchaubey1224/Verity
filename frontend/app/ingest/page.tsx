@@ -109,7 +109,7 @@ export default function IngestPage() {
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-base font-bold"
               style={{ background: "linear-gradient(135deg, #4f8ef7 0%, #7c5df7 100%)" }}>
-              R
+              V
             </div>
             <div>
               <p className="font-semibold text-[15px] leading-tight" style={{ color: "var(--foreground)" }}>Verity</p>
