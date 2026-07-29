@@ -3,6 +3,7 @@ from urllib.parse import urlsplit, urlunsplit, urlencode, parse_qsl
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from backend.core.config import settings
 
@@ -50,6 +51,26 @@ engine = create_async_engine(
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+
+# Celery runs each task in a fresh event loop via asyncio.run(). An asyncpg
+# connection is bound to the loop it was opened on, so reusing a pooled connection
+# from the shared `engine` on the next task's loop raises "got Future attached to a
+# different loop". NullPool opens a fresh connection per task and closes it on
+# checkin — nothing ever crosses event loops. Used only by the Celery workers;
+# the FastAPI app keeps the pooled `engine` above.
+worker_engine = create_async_engine(
+    _db_url,
+    echo=False,
+    poolclass=NullPool,
+    connect_args=_connect_args,
+)
+
+WorkerSessionLocal = async_sessionmaker(
+    bind=worker_engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
