@@ -17,8 +17,8 @@ interface UploadModalProps {
   /** The chat's current domain — used as the default ("all" falls back to "ml"). */
   defaultDomain: string
   onClose: () => void
-  /** Called after a successful upload with the (mandatory) document title. */
-  onUploaded: (title: string) => void
+  /** Called after a successful upload with the document title and its id. */
+  onUploaded: (title: string, documentId: string) => void
 }
 
 export function UploadModal({ defaultDomain, onClose, onUploaded }: UploadModalProps) {
@@ -43,8 +43,8 @@ export function UploadModal({ defaultDomain, onClose, onUploaded }: UploadModalP
     setUploading(true)
     setError(null)
     try {
-      await uploadFile(file, title.trim(), domain)
-      onUploaded(title.trim())
+      const res = await uploadFile(file, title.trim(), domain)
+      onUploaded(title.trim(), res.document_id)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed")
       setUploading(false)

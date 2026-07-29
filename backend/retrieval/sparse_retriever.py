@@ -10,13 +10,14 @@ log = logging.getLogger("verity.retrieval.sparse")
 
 class SparseRetriever:
     async def retrieve(
-        self, query: str, db: AsyncSession, top_k: int = 20, domain: str | None = None, user_id: str | None = None
+        self, query: str, db: AsyncSession, top_k: int = 20, domain: str | None = None, user_id: str | None = None, document_id: str | None = None
     ) -> list[RetrievedChunk]:
         """Full-text search using PostgreSQL tsvector + GIN index."""
-        log.info("[sparse] running FTS | top_k=%d | domain=%s | user=%s", top_k, domain, user_id)
+        log.info("[sparse] running FTS | top_k=%d | domain=%s | user=%s | doc=%s", top_k, domain, user_id, document_id)
 
         domain_filter = "AND d.domain = :domain" if domain else ""
         user_filter = "AND d.user_id = CAST(:user_id AS uuid)" if user_id else ""
+        doc_filter = "AND c.document_id = CAST(:document_id AS uuid)" if document_id else ""
 
         sql = text(f"""
             SELECT
@@ -31,6 +32,7 @@ class SparseRetriever:
             WHERE c.search_vector @@ plainto_tsquery('english', :query)
               {domain_filter}
               {user_filter}
+              {doc_filter}
             ORDER BY score DESC
             LIMIT :top_k
         """)
@@ -40,6 +42,8 @@ class SparseRetriever:
             params["domain"] = domain
         if user_id:
             params["user_id"] = str(user_id)
+        if document_id:
+            params["document_id"] = str(document_id)
 
         result = await db.execute(sql, params)
         rows = result.fetchall()

@@ -368,13 +368,15 @@ async def query_stream(
                 yield "data: {\"type\": \"done\"}\n\n"
             return StreamingResponse(_refuse(), media_type="text/event-stream")
 
-    # Retrieval — fast path: no graph (~7s saved), HyDE parallel with sparse
+    # Retrieval — fast path: no graph (~7s saved), HyDE parallel with sparse.
+    # document_id scopes retrieval to a single uploaded document (doc-scoped chat).
     chunks, best_dense_score = await _stream_retriever.retrieve(
         query=request.query,
         db=db,
         top_k=request.top_k,
         domain=request.domain,
         user_id=user_id,
+        document_id=request.document_id,
     )
 
     # Fetch document titles for source enrichment
@@ -391,13 +393,25 @@ async def query_stream(
     async def event_stream():
         active_chunks = chunks
         web_search_used = False
+        doc_scoped = bool(request.document_id)
+
+        # In a document-scoped chat the user is asking about one specific uploaded
+        # paper, so we always answer from that document and never fall back to the
+        # web — a summary-type query ("summarize this paper") scores low on cosine
+        # similarity but the retrieved chunks are the correct ones.
+        if doc_scoped and not active_chunks:
+            yield f"data: {json.dumps({'type': 'error', 'content': 'I could not read any content for this document. Please try re-uploading it.'})}\n\n"
+            yield "data: {\"type\": \"done\"}\n\n"
+            return
 
         # Cosine similarity threshold — meaningful relevance signal.
         # BAAI/bge-small scores any English text ~0.45-0.55, so an off-topic query
         # (e.g. a sports result against an ML-papers KB) still clears a low bar and
         # never reaches web search. Threshold is configurable via WEB_FALLBACK_THRESHOLD.
         # RRF scores (0.013-0.033) are rank-based, useless for this decision.
-        needs_web = not active_chunks or best_dense_score < settings.web_fallback_threshold
+        needs_web = (not doc_scoped) and (
+            not active_chunks or best_dense_score < settings.web_fallback_threshold
+        )
 
         if needs_web:
             yield f"data: {json.dumps({'type': 'token', 'content': '_Searching the web..._\n\n'})}\n\n"
@@ -493,6 +507,8 @@ async def query_stream(
             methods = ["Dense (Qdrant)", "Sparse BM25"]
             if settings.enable_reranker:
                 methods.append("Cross-Encoder Rerank")
+            if doc_scoped:
+                methods = ["This document"] + methods
         pipeline_info = {
             "type": "pipeline",
             "methods": methods,

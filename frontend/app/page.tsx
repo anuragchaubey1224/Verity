@@ -12,6 +12,7 @@ import { useAuth } from "@/lib/auth-context"
 import { UploadModal } from "@/components/upload-modal"
 
 const SESSION_TITLES_KEY = "verity_session_titles"
+const SESSION_DOCS_KEY = "verity_session_docs"
 
 const DOMAINS = [
   { value: "all", label: "All Domains", icon: "◈" },
@@ -79,6 +80,15 @@ export default function ChatPage() {
       return raw ? JSON.parse(raw) : {}
     } catch { return {} }
   })
+  // sessionId → uploaded document id. Set when a paper is uploaded in-chat so
+  // every query in that chat is scoped to that document (no web-search fallback).
+  const [sessionDocs, setSessionDocs] = useState<Record<string, string>>(() => {
+    if (typeof window === "undefined") return {}
+    try {
+      const raw = localStorage.getItem(SESSION_DOCS_KEY)
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
 
   // Gate the page behind auth.
   useEffect(() => {
@@ -133,11 +143,20 @@ export default function ChatPage() {
     })
   }
 
+  function bindSessionDoc(id: string, documentId: string) {
+    setSessionDocs(prev => {
+      const next = { ...prev, [id]: documentId }
+      try { localStorage.setItem(SESSION_DOCS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
+  }
+
   // Called by the upload modal after a successful upload: start a fresh chat
   // named after the paper and seed it with an intro so the user can discuss it.
-  function handleUploaded(paperTitle: string) {
+  function handleUploaded(paperTitle: string, documentId: string) {
     const id = crypto.randomUUID()
     nameSession(id, paperTitle)
+    bindSessionDoc(id, documentId)
     setSessionId(id)
     setMessages([{
       role: "assistant",
@@ -161,7 +180,12 @@ export default function ChatPage() {
 
     try {
       await queryKBStream(
-        { query: q, domain: domain === "all" ? null : domain, session_id: sessionId ?? undefined },
+        {
+          query: q,
+          domain: domain === "all" ? null : domain,
+          session_id: sessionId ?? undefined,
+          document_id: sessionId ? sessionDocs[sessionId] ?? null : null,
+        },
         (event) => {
           if (event.type === "token") {
             setMessages(prev => {

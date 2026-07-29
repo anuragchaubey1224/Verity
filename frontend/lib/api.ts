@@ -19,6 +19,8 @@ export interface QueryRequest {
   domain?: string | null
   session_id?: string | null
   top_k?: number
+  /** Restrict retrieval to a single uploaded document (doc-scoped chat). */
+  document_id?: string | null
 }
 
 export interface SourceItem {

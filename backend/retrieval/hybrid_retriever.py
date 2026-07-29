@@ -51,6 +51,7 @@ class HybridRetriever:
         top_k: int = 8,
         domain: str | None = None,
         user_id: str | None = None,
+        document_id: str | None = None,
     ) -> tuple[list[RetrievedChunk], float]:
         """Returns (chunks, best_dense_score).
 
@@ -66,15 +67,15 @@ class HybridRetriever:
         # Run HyDE (blocking LLM call) and sparse (async DB) concurrently
         if self.use_hyde:
             hyde_task = loop.run_in_executor(_thread_pool, generate_hypothetical_document, query)
-            sparse_task = self.sparse.retrieve(query, db=db, top_k=20, domain=domain, user_id=user_id)
+            sparse_task = self.sparse.retrieve(query, db=db, top_k=20, domain=domain, user_id=user_id, document_id=document_id)
             dense_query, sparse_results = await asyncio.gather(hyde_task, sparse_task)
         else:
-            sparse_results = await self.sparse.retrieve(query, db=db, top_k=20, domain=domain, user_id=user_id)
+            sparse_results = await self.sparse.retrieve(query, db=db, top_k=20, domain=domain, user_id=user_id, document_id=document_id)
             dense_query = query
 
         # Dense runs after HyDE (needs the hypothetical doc as query)
         dense_results = await loop.run_in_executor(
-            _thread_pool, self.dense.retrieve, dense_query, 20, domain, user_id
+            _thread_pool, self.dense.retrieve, dense_query, 20, domain, user_id, document_id
         )
 
         # Capture best cosine similarity BEFORE RRF overwrites scores
@@ -83,7 +84,7 @@ class HybridRetriever:
 
         results_to_fuse = [dense_results, sparse_results]
 
-        if self.use_graph:
+        if self.use_graph and not document_id:
             graph_results = await loop.run_in_executor(
                 _thread_pool, retrieve_by_entities, query, 10, domain, user_id
             )

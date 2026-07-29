@@ -24,7 +24,7 @@ class DenseRetriever:
     def __init__(self):
         self.embedder = EmbeddingService()
 
-    def retrieve(self, query: str, top_k: int = 5, domain: str | None = None, user_id: str | None = None) -> list[RetrievedChunk]:
+    def retrieve(self, query: str, top_k: int = 5, domain: str | None = None, user_id: str | None = None, document_id: str | None = None) -> list[RetrievedChunk]:
         """Embed the query and search Qdrant for the most similar chunks."""
         log.info("[dense] embedding query...")
         vector = self.embedder.embed_one(query)
@@ -34,6 +34,8 @@ class DenseRetriever:
             must.append(FieldCondition(key="user_id", match=MatchValue(value=user_id)))
         if domain:
             must.append(FieldCondition(key="domain", match=MatchValue(value=domain)))
+        if document_id:
+            must.append(FieldCondition(key="document_id", match=MatchValue(value=document_id)))
         query_filter = Filter(must=must) if must else None
 
         log.info("[dense] searching Qdrant | top_k=%d | domain=%s | user=%s", top_k, domain, user_id)

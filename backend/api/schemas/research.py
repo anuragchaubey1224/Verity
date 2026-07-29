@@ -18,6 +18,11 @@ class QueryRequest(BaseModel):
     top_k: int = Field(default=8, description="Number of chunks to retrieve from the vector store")
     domain: str | None = Field(default=None, description="Filter retrieval to a specific domain")
     session_id: str | None = Field(default=None, description="Session ID for conversation memory")
+    document_id: str | None = Field(
+        default=None,
+        description="Restrict retrieval to a single uploaded document (doc-scoped chat). "
+                    "When set, retrieval only searches this document and web fallback is disabled.",
+    )
 
 
 class SourceItem(BaseModel):
