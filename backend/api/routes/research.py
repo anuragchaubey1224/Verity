@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import re
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -73,6 +75,91 @@ from backend.memory.conversation_store import load_history, save_exchange
 from backend.workers.celery_app import celery_app
 
 router = APIRouter(prefix="/research", tags=["research"])
+
+
+# ── Intent triage ─────────────────────────────────────────────────────────
+# Greetings / small talk / questions about the assistant itself get a direct
+# conversational reply, so a simple "hello" never runs retrieval or the
+# web-search fallback (which used to fetch + ingest web pages about "hello").
+_SMALLTALK_RE = re.compile(
+    r"^\s*(hi+|hey+|hello+|yo|hola|namaste|sup|hiya|greetings|"
+    r"good\s*(morning|afternoon|evening|night)|"
+    r"thanks?|thank\s*you|thanks\s*a\s*lot|thx|ty|"
+    r"ok|okay|cool|nice|great|awesome|got\s*it|"
+    r"bye|goodbye|see\s*ya|"
+    r"how\s*(are|r)\s*(you|u)|how'?s\s*it\s*going|what'?s\s*up|whats\s*up|wassup)"
+    r"[\s!.,?]*$",
+    re.IGNORECASE,
+)
+
+_CHITCHAT_SYSTEM = (
+    "You are Verity, a research assistant that answers questions grounded in the "
+    "user's ingested documents (research papers). The user's current message is a "
+    "greeting or casual conversation, not a research question. Reply briefly and "
+    "warmly in 1-2 sentences. Do not invent facts or cite sources. When it fits, "
+    "invite them to ask about their papers or upload one."
+)
+
+
+def _looks_like_smalltalk(query: str) -> bool:
+    """Zero-cost fast path for the most common greetings / thanks."""
+    return bool(_SMALLTALK_RE.match(query.strip()))
+
+
+def _classify_intent_sync(query: str) -> str:
+    """Fast-LLM fallback for short, ambiguous messages → 'chitchat' or 'research'."""
+    resp = _llm.chat.completions.create(**provider_kwargs(),
+        model=settings.fast_llm_model,
+        messages=[{
+            "role": "user",
+            "content": (
+                'Classify the user message below.\n'
+                f'Message: "{query}"\n\n'
+                "Answer with exactly one word:\n"
+                "- chitchat : a greeting, small talk, thanks, or a question about you "
+                "(the assistant) such as who are you / what can you do.\n"
+                "- research : anything that asks for information, facts, an explanation, "
+                "or is about a topic.\n"
+                "Answer only: chitchat or research"
+            ),
+        }],
+        temperature=0,
+        max_tokens=3,
+    )
+    answer = (resp.choices[0].message.content or "").strip().lower()
+    return "chitchat" if answer.startswith("chitchat") else "research"
+
+
+def _stream_chitchat(query: str, conversation_history: list | None = None):
+    """Stream a short conversational reply — no retrieval, no citations."""
+    messages = [{"role": "system", "content": _CHITCHAT_SYSTEM}]
+    for turn in (conversation_history or [])[-4:]:
+        if turn.get("role") in ("user", "assistant") and turn.get("content"):
+            messages.append({"role": turn["role"], "content": turn["content"]})
+    messages.append({"role": "user", "content": query})
+
+    stream = None
+    for attempt in range(3):
+        try:
+            stream = _llm.chat.completions.create(**provider_kwargs(),
+                model=settings.llm_model,
+                messages=messages,
+                temperature=0.5,
+                max_tokens=300,
+                stream=True,
+            )
+            break
+        except Exception as exc:
+            if attempt < 2:
+                log.warning("[chitchat] LLM call failed (attempt %d/3), retrying: %s", attempt + 1, exc)
+                time.sleep(2)
+            else:
+                raise
+
+    for chunk in stream:
+        token = chunk.choices[0].delta.content or ""
+        if token:
+            yield token
 
 
 @router.get("/sessions")
@@ -227,6 +314,42 @@ async def query_stream(
     conversation_history = []
     if request.session_id:
         conversation_history = await load_history(request.session_id, db, user_id=user_id)
+
+    # Intent triage — greetings / small talk / meta questions get a direct
+    # conversational reply, skipping retrieval and the web-search fallback.
+    # Regex catches the common cases for free; a short, ambiguous message falls
+    # back to one cheap fast-LLM classification.
+    _q = request.query.strip()
+    is_chitchat = _looks_like_smalltalk(_q)
+    if not is_chitchat and 0 < len(_q.split()) <= 6:
+        loop = asyncio.get_event_loop()
+        is_chitchat = (
+            await loop.run_in_executor(_thread_pool, _classify_intent_sync, _q)
+        ) == "chitchat"
+
+    if is_chitchat:
+        async def _chat_stream():
+            full = ""
+            try:
+                for token in _stream_chitchat(request.query, conversation_history):
+                    full += token
+                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+            except Exception as exc:
+                log.warning("[stream] chitchat generation failed: %s", exc)
+                full = "Hi! I'm Verity. Ask me a question about your papers — or upload one to get started."
+                yield f"data: {json.dumps({'type': 'token', 'content': full})}\n\n"
+            if request.session_id:
+                await save_exchange(
+                    session_id=request.session_id, query=request.query,
+                    answer=full, db=db, user_id=user_id,
+                )
+            yield "data: {\"type\": \"done\"}\n\n"
+
+        return StreamingResponse(
+            _chat_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # Domain guard — fast binary check before retrieval
     if request.domain and request.domain != "all" and request.domain in _DOMAIN_LABELS:
