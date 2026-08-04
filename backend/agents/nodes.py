@@ -200,7 +200,7 @@ Reply with JSON only — no explanation:
 
 
 def generator_node(state: AgentState) -> dict:
-    """Assemble context and generate an answer using Groq."""
+    """Assemble context and generate an answer using the LLM (Llama 3.3 70B via OpenRouter)."""
     log.info("[generator] generating answer from %d chunks...", len(state["chunks"]))
     context = _assembler.assemble(state["chunks"])
     prompt = build_report_prompt(
@@ -248,7 +248,7 @@ def generator_node(state: AgentState) -> dict:
 
 
 def stream_generator_node(state: AgentState) -> Generator[str, None, dict]:
-    """Streaming version of generator — yields tokens as they arrive from Groq.
+    """Streaming version of generator — yields tokens as they arrive from the LLM (OpenRouter).
 
     Yields raw token strings. The caller is responsible for collecting them
     into the final answer and updating state.

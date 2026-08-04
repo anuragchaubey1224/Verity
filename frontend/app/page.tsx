@@ -580,7 +580,7 @@ export default function ChatPage() {
             <span className="text-lg">⏳</span>
             <div>
               <span style={{ color: "#fbbf24", fontWeight: 600 }}>Rate limit reached</span>
-              <span style={{ color: "var(--muted-foreground)" }}> — Only 2 queries allowed per 20 minutes.</span>
+              <span style={{ color: "var(--muted-foreground)" }}> — Only 20 queries allowed per 20 minutes.</span>
             </div>
             <div className="ml-auto shrink-0 font-mono font-bold text-base" style={{ color: "#fbbf24" }}>
               {Math.floor(rateLimitSeconds / 60)}:{String(rateLimitSeconds % 60).padStart(2, "0")}

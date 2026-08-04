@@ -6,7 +6,7 @@ from backend.ingestion.parsers.base import BaseParser, ParsedPage
 
 log = logging.getLogger("verity.ingestion.parsers.pdf")
 
-# Lazy import to avoid loading Groq at import time for non-PDF pipelines
+# Lazy import to avoid loading the vision LLM client at import time for non-PDF pipelines
 _describe_image = None
 
 

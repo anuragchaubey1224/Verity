@@ -44,7 +44,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A([User Query]) --> RL{Rate limit OK?<br/>2 req / 20 min per IP}
+    A([User Query]) --> RL{Rate limit OK?<br/>20 req / 20 min per user}
     RL -->|no| E429([429 Too Many Requests])
     RL -->|yes| H[Load conversation history]
 
@@ -52,7 +52,7 @@ flowchart TD
     DG -->|off-domain| REF([Polite refusal])
     DG -->|ok / all| RET[Fast Retriever<br/>dense + sparse + RRF + rerank<br/>HyDE and graph DISABLED]
 
-    RET --> C{best dense cosine ≥ 0.45?}
+    RET --> C{best dense cosine ≥ 0.6?}
     C -->|yes| GEN[Stream Generator tokens - SSE]
     C -->|no| WEB[Web Search - Tavily / DuckDuckGo]
 
@@ -98,7 +98,7 @@ flowchart TD
 
     D --> BD[best_dense_score = max cosine 0–1]
     TOP --> OUT([chunks])
-    BD --> THR{best_dense ≥ 0.45?}
+    BD --> THR{best_dense ≥ 0.6?}
     THR -->|yes| USE([Use KB context])
     THR -->|no| FALL([Web search fallback])
 
@@ -157,7 +157,7 @@ flowchart TD
 flowchart TD
     A([User Query]) --> B[Search internal KB<br/>dense + sparse → RRF]
     B --> C[best dense cosine score]
-    C --> H{score ≥ 0.45?}
+    C --> H{score ≥ 0.6?}
 
     H -->|strong KB hit| I[Use KB context]
     H -->|weak / missing| J[Web Search Agent<br/>Tavily → DuckDuckGo]
