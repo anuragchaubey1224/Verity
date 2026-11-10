@@ -23,13 +23,30 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.lock
 
       - name: Compile check
         run: python -m compileall -q backend main.py
 
+      - name: Migration graph check
+        env:
+          OPENROUTER_API_KEY: ci-placeholder
+          POSTGRES_URL: postgresql+asyncpg://postgres:password@localhost:5432/verity
+          QDRANT_URL: http://localhost:6333
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET_KEY: ci-placeholder
+        run: python -m alembic heads
+
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Build backend image
+        run: docker build --tag verity-backend:ci .
+
+      - name: Validate Compose configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
 
   frontend:
     name: Frontend lint + build
