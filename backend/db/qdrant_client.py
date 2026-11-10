@@ -23,7 +23,7 @@ def init_collection():
         print(f"Collection already exists: {settings.qdrant_collection}")
 
     # Payload indexes for fast filtering on every retrieval (idempotent).
-    for field in ("user_id", "domain"):
+    for field in ("user_id", "domain", "document_id"):
         try:
             client.create_payload_index(
                 collection_name=settings.qdrant_collection,
