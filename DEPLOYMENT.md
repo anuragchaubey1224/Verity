@@ -46,6 +46,7 @@ Create accounts and collect these values:
    | `QDRANT_URL` | from Qdrant Cloud |
    | `QDRANT_API_KEY` | from Qdrant Cloud |
    | `REDIS_URL` | from Upstash |
+   | `JWT_SECRET_KEY` | generate with `openssl rand -hex 32` |
    | `CORS_ORIGINS` | your Vercel URL (set after step 3) |
    | `APP_ENV` | `production` |
 
@@ -86,6 +87,7 @@ POSTGRES_URL=postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=require
 QDRANT_URL=https://xxxx.aws.cloud.qdrant.io:6333
 QDRANT_API_KEY=...
 REDIS_URL=rediss://default:pass@xxx.upstash.io:6379
+JWT_SECRET_KEY=replace-with-a-long-random-secret
 CORS_ORIGINS=https://your-app.vercel.app
 APP_ENV=production
 # optional
@@ -142,3 +144,7 @@ the frontend retries cold-start failures with backoff and a "waking up" message.
 > files under `data/uploads/` are lost on restart/rebuild; chunks and vectors
 > remain in Postgres/Qdrant. Move originals to S3/R2 if you need re-ingestion
 > from the source file.
+
+> **Security note:** never reuse credentials copied into local `.env` files,
+> shell history, screenshots, or logs. Rotate provider keys before deploying
+> a new environment.
