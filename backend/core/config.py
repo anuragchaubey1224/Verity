@@ -42,15 +42,7 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(description="Redis connection URL")
 
-    # Original document storage. "local" is suitable for development;
-    # configure an S3-compatible backend (for example R2) in production.
-    storage_backend: str = Field(default="local", description="Document storage backend: local or s3")
     storage_dir: str = Field(default="data/uploads", description="Local document storage directory")
-    storage_bucket: str | None = Field(default=None, description="S3-compatible bucket name")
-    storage_endpoint_url: str | None = Field(default=None, description="S3-compatible endpoint URL")
-    storage_access_key_id: str | None = Field(default=None, description="S3-compatible access key")
-    storage_secret_access_key: str | None = Field(default=None, description="S3-compatible secret key")
-    storage_region: str = Field(default="auto", description="S3-compatible region")
     max_upload_size_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
 
     # External dependency timeouts/retries

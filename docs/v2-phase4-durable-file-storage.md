@@ -2,13 +2,12 @@
 
 ## Scope
 
-Uploaded originals are now stored behind a storage adapter instead of being
-treated as disposable container files. Local storage remains the default for
-development. Production can use Cloudflare R2 or any S3-compatible provider.
+Uploaded originals are stored behind a small local filesystem adapter instead
+of being written using user-controlled filenames directly.
 
 ## Changes implemented
 
-- Added local and S3-compatible object storage adapters.
+- Added a local filesystem storage adapter.
 - Added upload size and extension validation.
 - Added generated storage keys; user filenames are never used as object paths.
 - Persisted original filename, content type, size, storage key, and SHA-256
@@ -21,14 +20,13 @@ development. Production can use Cloudflare R2 or any S3-compatible provider.
   objects into worker-local temporary files and cleaning them afterward.
 - Cleaned up a newly stored object if ingestion fails before completion.
 
-## Production setup
+## Deployment trade-off
 
-Set `STORAGE_BACKEND=s3` and configure the bucket, endpoint, access key, and
-secret key. For local development, keep `STORAGE_BACKEND=local` and choose a
-persistent `STORAGE_DIR`.
-
-The S3 adapter is intentionally compatible with R2 and MinIO. Credentials must
-be supplied through deployment secrets, never committed to the repository.
+The local adapter keeps the free-tier deployment simple and requires no
+additional storage credentials. Its originals are lost when the
+container filesystem is recreated; PostgreSQL chunks and Qdrant vectors remain
+available. Object storage can be added later if source-file recovery becomes
+a real requirement.
 
 ## Validation
 

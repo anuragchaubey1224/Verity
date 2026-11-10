@@ -90,13 +90,8 @@ REDIS_URL=rediss://default:pass@xxx.upstash.io:6379
 JWT_SECRET_KEY=replace-with-a-long-random-secret
 CORS_ORIGINS=https://your-app.vercel.app
 APP_ENV=production
-# durable originals (Cloudflare R2 or another S3-compatible provider)
-STORAGE_BACKEND=s3
-STORAGE_BUCKET=your-bucket
-STORAGE_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
-STORAGE_ACCESS_KEY_ID=...
-STORAGE_SECRET_ACCESS_KEY=...
-STORAGE_REGION=auto
+# original document storage (local filesystem)
+STORAGE_DIR=data/uploads
 QDRANT_COLLECTION_VERSION=v1
 # optional
 LLM_TIMEOUT_SECONDS=90
@@ -159,10 +154,10 @@ exceed the free compute-hour allowance. Neon's scale-to-zero cold start is short
 the frontend retries cold-start failures with backoff and a "waking up" message.
 
 > **Known limitation:** the HF container's filesystem is ephemeral. Uploaded
-> files are durable only when `STORAGE_BACKEND=s3` is configured. The local
-> backend is intended for development and its files are lost on restart/rebuild.
-> Chunks and vectors remain in Postgres/Qdrant, but original files must be
-> stored in R2 or another S3-compatible provider for reliable re-ingestion.
+> originals under `STORAGE_DIR` are lost on restart/rebuild; chunks and vectors
+> remain in Postgres/Qdrant. This simple zero-cost setup is suitable for the
+> current low-volume deployment. Add object storage later only if durable
+> original-file re-ingestion becomes necessary.
 
 > **Security note:** never reuse credentials copied into local `.env` files,
 > shell history, screenshots, or logs. Rotate provider keys before deploying
@@ -186,3 +181,12 @@ python -m scripts.reindex_qdrant --recreate
 The command reports PostgreSQL chunk count, Qdrant point count, missing
 points, and orphan points. `--recreate` is destructive for the configured
 collection, so run it only against the intended collection.
+
+### Data consistency and ownership
+
+PostgreSQL remains the source of truth for document metadata and chunks.
+Qdrant is a rebuildable derived index, and the API applies authenticated
+user filters to both dense and sparse retrieval. If a deployment reports
+missing or orphan points, run the read-only audit first and then use
+`--recreate` only after confirming the configured collection is the intended
+one.

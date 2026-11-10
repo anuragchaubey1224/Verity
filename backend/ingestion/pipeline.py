@@ -11,7 +11,10 @@ from qdrant_client.models import PointStruct
 from backend.core.config import settings
 from backend.db.models.document import Document
 from backend.db.models.chunk import Chunk
-from backend.db.qdrant_client import client as qdrant_client, deterministic_point_id
+from backend.db.qdrant_client import (
+    client as qdrant_client,
+    deterministic_point_id,
+)
 from backend.ingestion.parsers.pdf_parser import PDFParser
 from backend.ingestion.parsers.docx_parser import DOCXParser
 from backend.ingestion.parsers.txt_parser import TXTParser
@@ -196,7 +199,7 @@ async def ingest_document(
         )
     )
 
-    # Step 7b: Bulk insert chunks
+    # Step 7b: Bulk insert chunks.
     log.info("[pipeline] storing %d chunks in Postgres...", len(db_chunks))
     db.add_all(db_chunks)
     doc.status = "completed"

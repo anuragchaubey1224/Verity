@@ -73,6 +73,22 @@ from backend.memory.conversation_store import load_history, save_exchange
 router = APIRouter(prefix="/research", tags=["research"])
 
 
+async def _require_owned_document(
+    document_id: str,
+    user_id: uuid.UUID,
+    db: AsyncSession,
+) -> None:
+    try:
+        parsed_id = uuid.UUID(document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Document not found") from exc
+    exists = await db.scalar(
+        select(Document.id).where(Document.id == parsed_id, Document.user_id == user_id)
+    )
+    if exists is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+
 # ── Intent triage ─────────────────────────────────────────────────────────
 # Greetings / small talk / questions about the assistant itself get a direct
 # conversational reply, so a simple "hello" never runs retrieval or the
@@ -417,6 +433,9 @@ async def query_stream(
 
     user_id = str(current_user.id)
 
+    if request.document_id:
+        await _require_owned_document(request.document_id, current_user.id, db)
+
     # Rate limiting — per authenticated user
     allowed, retry_after = await check_rate_limit(user_id)
     if not allowed:
@@ -652,6 +671,9 @@ async def query(
     """Query the knowledge base using the agentic RAG pipeline."""
     graph = build_graph()
     user_id = str(current_user.id)
+
+    if request.document_id:
+        await _require_owned_document(request.document_id, current_user.id, db)
 
     # Load conversation history if session_id provided
     conversation_history = []
