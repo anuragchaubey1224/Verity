@@ -97,6 +97,7 @@ STORAGE_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
 STORAGE_ACCESS_KEY_ID=...
 STORAGE_SECRET_ACCESS_KEY=...
 STORAGE_REGION=auto
+QDRANT_COLLECTION_VERSION=v1
 # optional
 LLM_TIMEOUT_SECONDS=90
 LLM_MAX_RETRIES=2
@@ -158,10 +159,30 @@ exceed the free compute-hour allowance. Neon's scale-to-zero cold start is short
 the frontend retries cold-start failures with backoff and a "waking up" message.
 
 > **Known limitation:** the HF container's filesystem is ephemeral. Uploaded
-> files under `data/uploads/` are lost on restart/rebuild; chunks and vectors
-> remain in Postgres/Qdrant. Move originals to S3/R2 if you need re-ingestion
-> from the source file.
+> files are durable only when `STORAGE_BACKEND=s3` is configured. The local
+> backend is intended for development and its files are lost on restart/rebuild.
+> Chunks and vectors remain in Postgres/Qdrant, but original files must be
+> stored in R2 or another S3-compatible provider for reliable re-ingestion.
 
 > **Security note:** never reuse credentials copied into local `.env` files,
 > shell history, screenshots, or logs. Rotate provider keys before deploying
 > a new environment.
+
+### Qdrant recovery
+
+PostgreSQL chunks are the source of truth for rebuilding the vector index.
+Run the read-only consistency audit first:
+
+```bash
+python -m scripts.reindex_qdrant
+```
+
+After creating a new Qdrant cluster or collection, rebuild it explicitly:
+
+```bash
+python -m scripts.reindex_qdrant --recreate
+```
+
+The command reports PostgreSQL chunk count, Qdrant point count, missing
+points, and orphan points. `--recreate` is destructive for the configured
+collection, so run it only against the intended collection.

@@ -18,6 +18,8 @@ class Chunk(Base):
     page_number: Mapped[int | None] = mapped_column(Integer)
     word_count: Mapped[int | None] = mapped_column(Integer)
     qdrant_id: Mapped[str | None] = mapped_column(String(100))
+    embedding_model: Mapped[str | None] = mapped_column(String(255))
+    embedding_dimension: Mapped[int | None] = mapped_column(Integer)
     search_vector: Mapped[Any] = mapped_column(TSVECTOR, nullable=True)
 
     def __repr__(self):

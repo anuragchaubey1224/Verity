@@ -32,6 +32,10 @@ class Settings(BaseSettings):
         default="verity_chunks",
         description="Qdrant collection name for storing chunk vectors"
     )
+    qdrant_collection_version: str = Field(
+        default="v1",
+        description="Logical schema version written to Qdrant payloads",
+    )
     qdrant_api_key: str | None = Field(
         default=None,
         description="Qdrant Cloud API key (leave empty for local Qdrant)"

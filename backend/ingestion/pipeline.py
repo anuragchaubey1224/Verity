@@ -11,7 +11,7 @@ from qdrant_client.models import PointStruct
 from backend.core.config import settings
 from backend.db.models.document import Document
 from backend.db.models.chunk import Chunk
-from backend.db.qdrant_client import client as qdrant_client
+from backend.db.qdrant_client import client as qdrant_client, deterministic_point_id
 from backend.ingestion.parsers.pdf_parser import PDFParser
 from backend.ingestion.parsers.docx_parser import DOCXParser
 from backend.ingestion.parsers.txt_parser import TXTParser
@@ -148,7 +148,8 @@ async def ingest_document(
     db_chunks: list[Chunk] = []
 
     for chunk, vector in zip(text_chunks, vectors):
-        qdrant_id = str(uuid.uuid4())
+        db_chunk_id = uuid.uuid4()
+        qdrant_id = deterministic_point_id(db_chunk_id)
         entities = (
             await asyncio.to_thread(extract_entities, chunk.text)
             if settings.enable_entity_extraction
@@ -167,16 +168,22 @@ async def ingest_document(
                 "domain": domain,
                 "entities": entities,
                 "chunk_type": "base",
+                "embedding_model": settings.embedding_model,
+                "embedding_dimension": settings.embedding_dimension,
+                "collection_version": settings.qdrant_collection_version,
             },
         ))
 
         db_chunks.append(Chunk(
+            id=db_chunk_id,
             document_id=doc.id,
             text=chunk.text,
             chunk_index=chunk.chunk_index,
             page_number=chunk.page_number,
             word_count=chunk.word_count,
             qdrant_id=qdrant_id,
+            embedding_model=settings.embedding_model,
+            embedding_dimension=settings.embedding_dimension,
         ))
 
     # Step 7a: Upsert vectors into Qdrant

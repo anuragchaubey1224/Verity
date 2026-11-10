@@ -1,10 +1,17 @@
 import logging
+import uuid
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PayloadSchemaType, VectorParams
 from backend.core.config import settings
 
 log = logging.getLogger("verity.qdrant")
+POINT_ID_NAMESPACE = uuid.UUID("9b1d6b7b-8f25-4b54-a3a6-6bbf7c4c6a9c")
+
+
+def deterministic_point_id(chunk_id: uuid.UUID | str) -> str:
+    """Return a stable Qdrant UUID for a PostgreSQL chunk."""
+    return str(uuid.uuid5(POINT_ID_NAMESPACE, str(chunk_id)))
 
 client = QdrantClient(
     url=settings.qdrant_url,
