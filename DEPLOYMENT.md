@@ -91,6 +91,10 @@ JWT_SECRET_KEY=replace-with-a-long-random-secret
 CORS_ORIGINS=https://your-app.vercel.app
 APP_ENV=production
 # optional
+LLM_TIMEOUT_SECONDS=90
+LLM_MAX_RETRIES=2
+QDRANT_TIMEOUT_SECONDS=10
+REDIS_SOCKET_TIMEOUT_SECONDS=5
 LLM_MODEL=meta-llama/llama-3.3-70b-instruct:free
 FAST_LLM_MODEL=google/gemma-3-4b-it:free
 ```

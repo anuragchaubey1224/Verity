@@ -29,6 +29,7 @@ def _tavily_search(query: str, max_results: int) -> list[dict]:
             max_results=max_results,
             search_depth="advanced",
             include_raw_content=False,
+            timeout=settings.web_search_timeout_seconds,
         )
         results = [
             {
@@ -52,7 +53,7 @@ def _duckduckgo_search(query: str, max_results: int) -> list[dict]:
         resp = httpx.get(
             "https://api.duckduckgo.com/",
             params={"q": query, "format": "json", "no_redirect": "1"},
-            timeout=10,
+            timeout=settings.web_search_timeout_seconds,
             follow_redirects=True,
         )
         data = resp.json()

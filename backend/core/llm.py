@@ -14,11 +14,15 @@ from backend.core.config import settings
 llm = OpenAI(
     api_key=settings.openrouter_api_key,
     base_url="https://openrouter.ai/api/v1",
+    timeout=settings.llm_timeout_seconds,
+    max_retries=settings.llm_max_retries,
 )
 
 async_llm = AsyncOpenAI(
     api_key=settings.openrouter_api_key,
     base_url="https://openrouter.ai/api/v1",
+    timeout=settings.llm_timeout_seconds,
+    max_retries=settings.llm_max_retries,
 )
 
 fast_llm = llm  # Same client, different model at call time

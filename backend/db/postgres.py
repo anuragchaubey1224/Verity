@@ -33,6 +33,7 @@ def _normalize(raw_url: str) -> tuple[str, dict]:
     # Managed Postgres (Neon, etc.) requires TLS; local docker does not.
     if not is_local or sslmode in ("require", "verify-ca", "verify-full"):
         connect_args["ssl"] = ssl.create_default_context()
+    connect_args["timeout"] = settings.postgres_connect_timeout_seconds
 
     return clean, connect_args
 
@@ -46,6 +47,7 @@ engine = create_async_engine(
     max_overflow=10,
     pool_pre_ping=True,   # Neon scales to zero — drop stale connections gracefully
     pool_recycle=300,
+    pool_timeout=settings.postgres_connect_timeout_seconds,
     connect_args=_connect_args,
 )
 

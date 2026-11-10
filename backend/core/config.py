@@ -38,6 +38,44 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(description="Redis connection URL")
 
+    # External dependency timeouts/retries
+    postgres_connect_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="Maximum time to establish a PostgreSQL connection",
+    )
+    qdrant_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="Maximum time for a Qdrant operation",
+    )
+    redis_connect_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="Maximum time to connect to Redis",
+    )
+    redis_socket_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="Maximum time for a Redis command",
+    )
+    llm_timeout_seconds: float = Field(
+        default=90.0,
+        gt=0,
+        description="Maximum time for an LLM request",
+    )
+    llm_max_retries: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Maximum automatic retries for transient LLM failures",
+    )
+    web_search_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        description="Maximum time for a web search request",
+    )
+
     # Embedding
     embedding_model: str = Field(
         default="BAAI/bge-small-en-v1.5",

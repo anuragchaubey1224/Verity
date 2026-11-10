@@ -9,7 +9,13 @@ log = logging.getLogger("verity.rate_limit")
 # Async client: this module is called from FastAPI request handlers. Using the
 # sync Redis client there would block the event loop for every quota check
 # (Upstash is a network round-trip, often 20-100 ms).
-_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+_client = aioredis.from_url(
+    settings.redis_url,
+    decode_responses=True,
+    socket_connect_timeout=settings.redis_connect_timeout_seconds,
+    socket_timeout=settings.redis_socket_timeout_seconds,
+    retry_on_timeout=True,
+)
 
 WINDOW_SECONDS = 20 * 60  # 20 minutes
 MAX_REQUESTS = 20  # per authenticated user
