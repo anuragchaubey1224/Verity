@@ -6,7 +6,6 @@ import uuid
 from contextlib import aclosing
 from pathlib import Path
 
-from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
@@ -61,13 +60,13 @@ from backend.api.schemas.research import (
     TaskStatusResponse,
 )
 from backend.db.models.document import Document
+from backend.db.models.ingestion_job import IngestionJob
 from backend.db.models.user import User
-from backend.db.postgres import get_db
+from backend.db.postgres import AsyncSessionLocal, get_db
 from backend.api.dependencies.auth import get_current_user
 from backend.api.middleware.rate_limit import check_rate_limit
 from backend.ingestion.pipeline import ingest_document
 from backend.memory.conversation_store import load_history, save_exchange
-from backend.workers.celery_app import celery_app
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -276,35 +275,102 @@ async def ingest_async(request: IngestRequest, current_user: User = Depends(get_
     """Async ingest — queues a background task and returns immediately."""
     from backend.workers.tasks import ingest_document_task
 
-    task = ingest_document_task.delay(
-        source=request.source,
-        title=request.title,
-        domain=request.domain,
-        user_id=str(current_user.id),
-    )
+    async with AsyncSessionLocal() as db:
+        job = IngestionJob(
+            user_id=current_user.id,
+            source=request.source,
+            title=request.title,
+            domain=request.domain,
+            status="queued",
+        )
+        db.add(job)
+        await db.flush()
+        job_id = str(job.id)
+        await db.commit()
+
+    try:
+        task = ingest_document_task.delay(
+            source=request.source,
+            title=request.title,
+            domain=request.domain,
+            user_id=str(current_user.id),
+            job_id=job_id,
+        )
+    except Exception as exc:
+        log.exception("[ingest] failed to enqueue job | job_id=%s", job_id)
+        async with AsyncSessionLocal() as db:
+            failed_job = await db.scalar(select(IngestionJob).where(IngestionJob.id == job.id))
+            if failed_job:
+                failed_job.status = "failed"
+                failed_job.error = f"Queue unavailable: {exc}"[:4000]
+                await db.commit()
+        raise HTTPException(status_code=503, detail="Ingestion queue is temporarily unavailable")
+
+    async with AsyncSessionLocal() as db:
+        queued_job = await db.scalar(select(IngestionJob).where(IngestionJob.id == job.id))
+        if queued_job:
+            queued_job.celery_task_id = task.id
+            await db.commit()
     return AsyncIngestResponse(
         task_id=task.id,
+        job_id=job_id,
         status="queued",
         message=f"Ingestion queued. Check status at /research/tasks/{task.id}",
     )
 
 
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse)
-async def get_task_status(task_id: str, current_user: User = Depends(get_current_user)):
-    """Check the status of a background ingestion task."""
-    result = AsyncResult(task_id, app=celery_app)
+async def get_task_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check durable ingestion status for a task owned by the authenticated user."""
+    job = await db.scalar(
+        select(IngestionJob).where(
+            IngestionJob.celery_task_id == task_id,
+            IngestionJob.user_id == current_user.id,
+        )
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="Ingestion task not found")
 
-    match result.state:
-        case "PENDING":
-            return TaskStatusResponse(task_id=task_id, status="queued")
-        case "STARTED":
-            return TaskStatusResponse(task_id=task_id, status="running")
-        case "SUCCESS":
-            return TaskStatusResponse(task_id=task_id, status="completed", result=result.result)
-        case "FAILURE":
-            return TaskStatusResponse(task_id=task_id, status="failed", error=str(result.result))
-        case _:
-            return TaskStatusResponse(task_id=task_id, status=result.state.lower())
+    result = None
+    if job.document_id:
+        result = {"document_id": str(job.document_id), "title": job.title, "status": job.status}
+    return TaskStatusResponse(task_id=task_id, status=job.status, result=result, error=job.error)
+
+
+@router.get("/jobs/{job_id}", response_model=TaskStatusResponse)
+async def get_ingestion_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check durable ingestion status using the persistent job identifier."""
+    try:
+        parsed_job_id = uuid.UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Ingestion job not found") from exc
+
+    job = await db.scalar(
+        select(IngestionJob).where(
+            IngestionJob.id == parsed_job_id,
+            IngestionJob.user_id == current_user.id,
+        )
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="Ingestion job not found")
+
+    result = None
+    if job.document_id:
+        result = {"document_id": str(job.document_id), "title": job.title, "status": job.status}
+    return TaskStatusResponse(
+        task_id=job.celery_task_id or str(job.id),
+        status=job.status,
+        result=result,
+        error=job.error,
+    )
 
 
 @router.post("/query/stream")

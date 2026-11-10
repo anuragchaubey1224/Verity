@@ -11,5 +11,6 @@ from backend.db.models.user import User
 from backend.db.models.document import Document
 from backend.db.models.chunk import Chunk
 from backend.db.models.conversation import ConversationHistory
+from backend.db.models.ingestion_job import IngestionJob
 
-__all__ = ["User", "Document", "Chunk", "ConversationHistory"]
+__all__ = ["User", "Document", "Chunk", "ConversationHistory", "IngestionJob"]

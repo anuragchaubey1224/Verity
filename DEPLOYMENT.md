@@ -113,6 +113,12 @@ Frontend (Vercel): `NEXT_PUBLIC_API_URL=https://<HF_USERNAME>-<HF_SPACE_NAME>.hf
 
 So after the initial setup, **`git push` → both frontend and backend update.**
 
+Asynchronous ingestion persists its job state in PostgreSQL. The API can
+recover status after a worker or Redis restart using either the returned
+`job_id` at `/research/jobs/{job_id}` or the returned Celery task ID at
+`/research/tasks/{task_id}`. Run migrations before using asynchronous
+ingestion; the HF startup script applies them automatically.
+
 ---
 
 ## 6. Keeping free-tier services awake

@@ -42,6 +42,7 @@ class QueryResponse(BaseModel):
 
 class AsyncIngestResponse(BaseModel):
     task_id: str
+    job_id: str | None = None
     status: str
     message: str
 
