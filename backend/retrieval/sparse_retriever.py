@@ -48,6 +48,40 @@ class SparseRetriever:
         result = await db.execute(sql, params)
         rows = result.fetchall()
 
+        # A recreated Qdrant cluster can lose vectors while Postgres still
+        # retains the document chunks. Keep document-scoped chat usable from
+        # the durable source until the vector index is rebuilt.
+        if not rows and document_id:
+            fallback_sql = text("""
+                SELECT
+                    c.text,
+                    c.document_id::text,
+                    c.chunk_index,
+                    c.page_number,
+                    d.domain,
+                    0.0 AS score
+                FROM chunks c
+                JOIN documents d ON c.document_id = d.id
+                WHERE c.document_id = CAST(:document_id AS uuid)
+                  AND (:user_id IS NULL OR d.user_id = CAST(:user_id AS uuid))
+                ORDER BY c.chunk_index
+                LIMIT :top_k
+            """)
+            fallback_params = {
+                "document_id": str(document_id),
+                "user_id": str(user_id) if user_id else None,
+                "top_k": top_k,
+            }
+            fallback_result = await db.execute(fallback_sql, fallback_params)
+            rows = fallback_result.fetchall()
+            if rows:
+                log.warning(
+                    "[sparse] FTS returned no matches; using %d stored chunks "
+                    "for document=%s because vector index may need rebuilding",
+                    len(rows),
+                    document_id,
+                )
+
         log.info("[sparse] found %d results", len(rows))
         return [
             RetrievedChunk(
