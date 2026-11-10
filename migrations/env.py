@@ -17,8 +17,15 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# asyncpg URL ko sync psycopg2 URL mein convert karo — Alembic sync driver use karta hai
-sync_url = settings.postgres_url.replace("postgresql+asyncpg", "postgresql+psycopg2")
+# Alembic uses the installed synchronous psycopg2 driver. Normalize raw
+# PostgreSQL URLs as well as the async URL used by the application.
+sync_url = settings.postgres_url
+if sync_url.startswith("postgresql+asyncpg://"):
+    sync_url = sync_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+elif sync_url.startswith("postgresql://"):
+    sync_url = sync_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+elif sync_url.startswith("postgres://"):
+    sync_url = sync_url.replace("postgres://", "postgresql+psycopg2://", 1)
 
 
 def run_migrations_offline() -> None:

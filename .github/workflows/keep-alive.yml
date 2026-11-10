@@ -1,13 +1,13 @@
-name: Keep backend + Qdrant warm
+name: Keep backend + Qdrant + Redis warm
 
 # Free-tier services idle themselves out:
 #   - HF Spaces sleep after ~48h without traffic, and can hit a "scheduling
 #     failure" on cold wake (see interview_docs/19_debugging_war_stories.md).
 #   - Qdrant Cloud free clusters can pause after long inactivity.
 #
-# A ping every 30 minutes to /health resets both clocks. /health touches Qdrant
-# but NOT Postgres on purpose: keeping Neon compute awake 24/7 would blow the
-# free compute-hour allowance, while Neon's scale-to-zero cold start is short.
+# A ping every 30 minutes to /health/warm touches the backend, Qdrant, and
+# Redis, but NOT Postgres on purpose: keeping Neon compute awake 24/7 would
+# blow the free compute-hour allowance, while its cold start is short.
 #
 # GitHub scheduled workflows are best-effort (they can be delayed, and public
 # repos with 60 days of inactivity get schedules disabled). Treat this as the
@@ -38,13 +38,13 @@ jobs:
             exit 1
           fi
 
-      - name: Ping /health
+      - name: Ping /health/warm
         run: |
-          echo "Pinging $BACKEND_URL/health"
+          echo "Pinging $BACKEND_URL/health/warm"
           curl -fsS \
             --retry 5 --retry-all-errors --retry-delay 10 \
             --max-time 90 \
-            "$BACKEND_URL/health"
+            "$BACKEND_URL/health/warm"
           echo
 
   readiness:

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from backend.api.middleware.rate_limit import ping_redis
 from backend.api.routes.auth import router as auth_router
 from backend.api.routes.research import router as research_router
 from backend.core.config import settings
@@ -94,6 +95,28 @@ async def health():
     except Exception:
         qdrant_ok = False
     return {"status": "ok", "qdrant": "ok" if qdrant_ok else "unreachable"}
+
+
+@app.get("/health/warm")
+async def health_warm():
+    """Keep-alive probe for HF, Qdrant, and Redis without waking Postgres."""
+    try:
+        qdrant_ok, redis_ok = await asyncio.gather(
+            asyncio.wait_for(asyncio.to_thread(qdrant_ping), timeout=PROBE_TIMEOUT_SECONDS),
+            asyncio.wait_for(ping_redis(), timeout=PROBE_TIMEOUT_SECONDS),
+        )
+    except Exception:
+        qdrant_ok = False
+        redis_ok = False
+    ready = qdrant_ok and redis_ok
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "ok" if ready else "degraded",
+            "qdrant": "ok" if qdrant_ok else "unreachable",
+            "redis": "ok" if redis_ok else "unreachable",
+        },
+    )
 
 
 @app.get("/health/ready")

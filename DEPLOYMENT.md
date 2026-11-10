@@ -132,6 +132,7 @@ Health endpoints:
 |---|---|---|
 | `/health/live` | process only | container liveness |
 | `/health` | process + Qdrant | keep-alive / uptime monitor |
+| `/health/warm` | process + Qdrant + Redis | GitHub keep-alive monitor |
 | `/health/ready` | Postgres + Qdrant + Redis | full readiness (`503` if degraded) |
 
 `/health` intentionally does **not** touch Postgres: pinging Neon 24/7 would
