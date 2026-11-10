@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.config import settings
+from backend.db.postgres import AsyncSessionLocal
 from backend.retrieval.dense_retriever import DenseRetriever, RetrievedChunk
 from backend.retrieval.sparse_retriever import SparseRetriever
 from backend.retrieval.hyde import generate_hypothetical_document
@@ -13,6 +14,26 @@ from backend.retrieval.graph_expander import retrieve_by_entities
 log = logging.getLogger("verity.retrieval.hybrid")
 
 _thread_pool = ThreadPoolExecutor(max_workers=4)
+
+
+async def _retrieve_sparse(
+    retriever: SparseRetriever,
+    query: str,
+    top_k: int,
+    domain: str | None,
+    user_id: str | None,
+    document_id: str | None,
+) -> list[RetrievedChunk]:
+    """Use a private session because dense and sparse retrieval run concurrently."""
+    async with AsyncSessionLocal() as session:
+        return await retriever.retrieve(
+            query,
+            db=session,
+            top_k=top_k,
+            domain=domain,
+            user_id=user_id,
+            document_id=document_id,
+        )
 
 
 def _reciprocal_rank_fusion(
@@ -70,8 +91,13 @@ class HybridRetriever:
             hyde_task = loop.run_in_executor(_thread_pool, generate_hypothetical_document, query)
             dense_query, sparse_results = await asyncio.gather(
                 hyde_task,
-                self.sparse.retrieve(
-                    query, db=db, top_k=20, domain=domain, user_id=user_id, document_id=document_id
+                _retrieve_sparse(
+                    self.sparse,
+                    query,
+                    20,
+                    domain,
+                    user_id,
+                    document_id,
                 ),
             )
             dense_results = await loop.run_in_executor(
@@ -80,8 +106,13 @@ class HybridRetriever:
         else:
             # Fast path (chat): dense and sparse are independent — run both at once.
             sparse_results, dense_results = await asyncio.gather(
-                self.sparse.retrieve(
-                    query, db=db, top_k=20, domain=domain, user_id=user_id, document_id=document_id
+                _retrieve_sparse(
+                    self.sparse,
+                    query,
+                    20,
+                    domain,
+                    user_id,
+                    document_id,
                 ),
                 loop.run_in_executor(
                     _thread_pool, self.dense.retrieve, query, 20, domain, user_id, document_id
