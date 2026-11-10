@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import uuid
+import tempfile
 from contextlib import aclosing
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from backend.agents.graph import build_graph
 from backend.agents.nodes import stream_generator_node_async
 from backend.core.config import settings
 from backend.core.llm import async_llm as _async_llm, provider_kwargs
+from backend.core.storage import StorageError, delete as delete_storage_object, put_bytes
 from backend.retrieval.hybrid_retriever import HybridRetriever
 from backend.retrieval.dense_retriever import RetrievedChunk
 from backend.retrieval.web_searcher import search_web
@@ -235,21 +237,52 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a PDF (or any file) directly — saved locally then ingested through the full pipeline."""
-    upload_dir = Path("data/uploads")
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    """Persist an upload, ingest a temporary copy, and retain the original object."""
+    safe_name = Path(file.filename).name if file.filename else "upload.txt"
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in {".pdf", ".docx", ".txt", ".md"}:
+        raise HTTPException(status_code=415, detail="Only PDF, DOCX, TXT, and Markdown files are supported")
 
-    safe_name = Path(file.filename).name if file.filename else "upload.pdf"
-    file_path = upload_dir / safe_name
-    file_path.write_bytes(await file.read())
+    data = await file.read(settings.max_upload_size_bytes + 1)
+    if len(data) > settings.max_upload_size_bytes:
+        raise HTTPException(status_code=413, detail="Uploaded file exceeds the configured size limit")
 
-    doc = await ingest_document(
-        source=str(file_path),
-        title=title,
-        db=db,
-        domain=domain,
-        user_id=str(current_user.id),
-    )
+    try:
+        storage_key, checksum = await asyncio.to_thread(
+            put_bytes, data, safe_name, file.content_type
+        )
+    except StorageError as exc:
+        log.exception("[upload] object storage failed")
+        raise HTTPException(status_code=503, detail="Document storage is temporarily unavailable") from exc
+
+    file_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+            temp_file.write(data)
+            file_path = temp_file.name
+        doc = await ingest_document(
+            source=file_path,
+            title=title,
+            db=db,
+            domain=domain,
+            user_id=str(current_user.id),
+            storage_key=storage_key,
+            original_filename=safe_name,
+            content_type=file.content_type,
+            file_size_bytes=len(data),
+            checksum_sha256=checksum,
+        )
+        doc.source_path = storage_key
+        await db.commit()
+    except Exception:
+        try:
+            await asyncio.to_thread(delete_storage_object, storage_key)
+        except StorageError:
+            log.exception("[upload] failed to clean up object after ingestion failure")
+        raise
+    finally:
+        if file_path:
+            Path(file_path).unlink(missing_ok=True)
     return IngestResponse(document_id=str(doc.id), title=doc.title, status=doc.status)
 
 

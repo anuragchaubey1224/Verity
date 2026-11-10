@@ -90,6 +90,13 @@ REDIS_URL=rediss://default:pass@xxx.upstash.io:6379
 JWT_SECRET_KEY=replace-with-a-long-random-secret
 CORS_ORIGINS=https://your-app.vercel.app
 APP_ENV=production
+# durable originals (Cloudflare R2 or another S3-compatible provider)
+STORAGE_BACKEND=s3
+STORAGE_BUCKET=your-bucket
+STORAGE_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+STORAGE_ACCESS_KEY_ID=...
+STORAGE_SECRET_ACCESS_KEY=...
+STORAGE_REGION=auto
 # optional
 LLM_TIMEOUT_SECONDS=90
 LLM_MAX_RETRIES=2

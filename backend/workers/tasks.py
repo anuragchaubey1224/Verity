@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 
@@ -64,14 +66,34 @@ def ingest_document_task(
     log.info("[task] ingest_document started | title=%r | source=%s", title, source)
 
     async def _run() -> dict:
+        from backend.core.storage import read_bytes
         from backend.db.postgres import WorkerSessionLocal
         from backend.db.qdrant_client import init_collection
         from backend.ingestion.pipeline import ingest_document
 
         init_collection()
-        async with WorkerSessionLocal() as db:
-            doc = await ingest_document(source=source, title=title, db=db, domain=domain, user_id=user_id)
-            return {"document_id": str(doc.id), "title": doc.title, "status": doc.status}
+        source_path = source
+        temporary_path = None
+        if source.startswith("storage://"):
+            key = source.removeprefix("storage://")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(key)[1]) as temp_file:
+                temp_file.write(await asyncio.to_thread(read_bytes, key))
+                temporary_path = temp_file.name
+            source_path = temporary_path
+
+        try:
+            async with WorkerSessionLocal() as db:
+                doc = await ingest_document(
+                    source=source_path, title=title, db=db, domain=domain, user_id=user_id
+                )
+                if source.startswith("storage://"):
+                    doc.source_path = source
+                    doc.storage_key = source.removeprefix("storage://")
+                    await db.commit()
+                return {"document_id": str(doc.id), "title": doc.title, "status": doc.status}
+        finally:
+            if temporary_path:
+                os.unlink(temporary_path)
 
     attempts = self.request.retries + 1
     try:

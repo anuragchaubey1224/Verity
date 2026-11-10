@@ -65,6 +65,11 @@ async def ingest_document(
     db: AsyncSession,
     domain: str | None = None,
     user_id: str | None = None,
+    storage_key: str | None = None,
+    original_filename: str | None = None,
+    content_type: str | None = None,
+    file_size_bytes: int | None = None,
+    checksum_sha256: str | None = None,
 ) -> Document:
     """Full ingestion pipeline: parse → chunk → embed → store in Qdrant + Postgres."""
 
@@ -121,7 +126,19 @@ async def ingest_document(
 
     # Step 6: Save Document row
     log.info("[pipeline] step 6/7 — saving to Postgres...")
-    doc = Document(title=title, source_path=source, domain=domain, status="processing", file_hash=file_hash, user_id=uid)
+    doc = Document(
+        title=title,
+        source_path=source,
+        storage_key=storage_key,
+        original_filename=original_filename,
+        content_type=content_type,
+        file_size_bytes=file_size_bytes,
+        checksum_sha256=checksum_sha256,
+        domain=domain,
+        status="processing",
+        file_hash=file_hash,
+        user_id=uid,
+    )
     db.add(doc)
     await db.flush()
     log.info("[pipeline] document saved | id=%s", doc.id)

@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class IngestRequest(BaseModel):
-    source: str = Field(description="File path or URL to ingest")
+    source: str = Field(description="File path, URL, or storage:// key to ingest")
     title: str = Field(description="Human-readable document title")
     domain: str | None = Field(default=None, description="Optional domain tag for filtering during retrieval")
 
