@@ -158,3 +158,9 @@ desktop.ini
 # =========================
 plan.md
 improvement_plan.md
+
+# =========================
+# Claude Code local files (NOT for public repo)
+# =========================
+.claude/
+interview_docs/

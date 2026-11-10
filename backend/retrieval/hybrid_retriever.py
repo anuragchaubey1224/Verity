@@ -62,21 +62,31 @@ class HybridRetriever:
         log.info("[hybrid] starting retrieval | hyde=%s | graph=%s | domain=%s | user=%s",
                  self.use_hyde, self.use_graph, domain, user_id)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
-        # Run HyDE (blocking LLM call) and sparse (async DB) concurrently
         if self.use_hyde:
+            # HyDE (blocking LLM + ONNX) and sparse (async DB) run concurrently.
+            # Dense must wait for the hypothetical document it embeds.
             hyde_task = loop.run_in_executor(_thread_pool, generate_hypothetical_document, query)
-            sparse_task = self.sparse.retrieve(query, db=db, top_k=20, domain=domain, user_id=user_id, document_id=document_id)
-            dense_query, sparse_results = await asyncio.gather(hyde_task, sparse_task)
+            dense_query, sparse_results = await asyncio.gather(
+                hyde_task,
+                self.sparse.retrieve(
+                    query, db=db, top_k=20, domain=domain, user_id=user_id, document_id=document_id
+                ),
+            )
+            dense_results = await loop.run_in_executor(
+                _thread_pool, self.dense.retrieve, dense_query, 20, domain, user_id, document_id
+            )
         else:
-            sparse_results = await self.sparse.retrieve(query, db=db, top_k=20, domain=domain, user_id=user_id, document_id=document_id)
-            dense_query = query
-
-        # Dense runs after HyDE (needs the hypothetical doc as query)
-        dense_results = await loop.run_in_executor(
-            _thread_pool, self.dense.retrieve, dense_query, 20, domain, user_id, document_id
-        )
+            # Fast path (chat): dense and sparse are independent — run both at once.
+            sparse_results, dense_results = await asyncio.gather(
+                self.sparse.retrieve(
+                    query, db=db, top_k=20, domain=domain, user_id=user_id, document_id=document_id
+                ),
+                loop.run_in_executor(
+                    _thread_pool, self.dense.retrieve, query, 20, domain, user_id, document_id
+                ),
+            )
 
         # Capture best cosine similarity BEFORE RRF overwrites scores
         best_dense_score = max((c.score for c in dense_results), default=0.0)

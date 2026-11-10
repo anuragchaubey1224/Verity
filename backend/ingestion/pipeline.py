@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import hashlib
 import logging
 import os
@@ -16,7 +18,7 @@ from backend.ingestion.parsers.txt_parser import TXTParser
 from backend.ingestion.parsers.web_parser import WebParser
 from backend.ingestion.parsers.base import BaseParser
 from backend.ingestion.chunking.factory import get_chunker
-from backend.ingestion.embedding.embedding_service import EmbeddingService
+from backend.ingestion.embedding.embedding_service import get_embedding_service
 from backend.ingestion.cleaning.text_cleaner import clean_page_text, is_clean_chunk
 from backend.ingestion.graph.entity_extractor import extract_entities
 from sqlalchemy import select
@@ -83,11 +85,14 @@ async def ingest_document(
 
     parser = _get_parser(doc_type)
     chunker = get_chunker(doc_type)
-    embedder = EmbeddingService()
 
+    # Steps 1-5 are CPU/network-bound and synchronous (PyMuPDF, trafilatura,
+    # langchain splitters, ONNX inference). Offload them to worker threads so
+    # ingestion never blocks the FastAPI event loop. The async DB calls stay on
+    # the main thread, where the AsyncSession belongs.
     # Step 1: Parse
     log.info("[pipeline] step 1/7 — parsing...")
-    pages = parser.parse(source)
+    pages = await asyncio.to_thread(parser.parse, source)
     log.info("[pipeline] parsed %d pages", len(pages))
 
     # Step 2: Clean pages (remove noise before chunking)
@@ -99,7 +104,7 @@ async def ingest_document(
 
     # Step 3: Chunk
     log.info("[pipeline] step 3/7 — chunking...")
-    text_chunks = chunker.chunk(pages)
+    text_chunks = await asyncio.to_thread(chunker.chunk, pages)
     raw_count = len(text_chunks)
 
     # Step 4: Filter low-quality chunks
@@ -109,7 +114,9 @@ async def ingest_document(
 
     # Step 5: Embed
     log.info("[pipeline] step 5/7 — embedding %d chunks...", len(text_chunks))
-    vectors = embedder.embed([c.text for c in text_chunks])
+    vectors = await asyncio.to_thread(
+        get_embedding_service().embed, [c.text for c in text_chunks]
+    )
     log.info("[pipeline] embedded %d vectors (dim=%d)", len(vectors), len(vectors[0]) if vectors else 0)
 
     # Step 6: Save Document row
@@ -125,7 +132,11 @@ async def ingest_document(
 
     for chunk, vector in zip(text_chunks, vectors):
         qdrant_id = str(uuid.uuid4())
-        entities = extract_entities(chunk.text) if settings.enable_entity_extraction else []
+        entities = (
+            await asyncio.to_thread(extract_entities, chunk.text)
+            if settings.enable_entity_extraction
+            else []
+        )
 
         qdrant_points.append(PointStruct(
             id=qdrant_id,
@@ -153,9 +164,12 @@ async def ingest_document(
 
     # Step 7a: Upsert vectors into Qdrant
     log.info("[pipeline] step 7/7 — storing %d vectors in Qdrant...", len(qdrant_points))
-    qdrant_client.upsert(
-        collection_name=settings.qdrant_collection,
-        points=qdrant_points,
+    await asyncio.to_thread(
+        functools.partial(
+            qdrant_client.upsert,
+            collection_name=settings.qdrant_collection,
+            points=qdrant_points,
+        )
     )
 
     # Step 7b: Bulk insert chunks

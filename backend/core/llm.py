@@ -1,13 +1,22 @@
 """Central LLM client — single source of truth for all OpenRouter calls.
 
-All modules import `llm`, `fast_llm`, and `provider_kwargs` from here.
-Provider is controlled via LLM_PROVIDER in .env.
+All modules import `llm` (sync) or `async_llm` (async) and `provider_kwargs`
+from here. Provider is controlled via LLM_PROVIDER in .env.
+
+Use `async_llm` on request paths (FastAPI streaming/generation) so a slow LLM
+call never blocks the event loop. `llm` is kept for sync contexts: LangGraph
+sync nodes, Celery ingestion, evaluation scripts.
 """
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from backend.core.config import settings
 
 llm = OpenAI(
+    api_key=settings.openrouter_api_key,
+    base_url="https://openrouter.ai/api/v1",
+)
+
+async_llm = AsyncOpenAI(
     api_key=settings.openrouter_api_key,
     base_url="https://openrouter.ai/api/v1",
 )

@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from langgraph.graph import END, START, StateGraph
 
 from backend.agents.nodes import (
@@ -25,8 +27,12 @@ def _route_after_web_search(state: AgentState) -> str:
     return "generator" if state["chunks"] else END
 
 
+@lru_cache(maxsize=1)
 def build_graph():
     """Build and compile the full agentic RAG graph.
+
+    Cached: compiling a StateGraph is not free and the graph is stateless —
+    rebuilding it on every `/research/query` call was pure overhead.
 
     Flow:
       planner → retriever → grader

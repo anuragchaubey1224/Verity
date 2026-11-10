@@ -22,13 +22,11 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Only "loading" when there's a token to verify; otherwise we're settled logged-out.
+  const [loading, setLoading] = useState<boolean>(() => !!getToken())
 
   useEffect(() => {
-    if (!getToken()) {
-      setLoading(false)
-      return
-    }
+    if (!getToken()) return
     api.getMe()
       .then((u) => setUser(u))
       .catch(() => clearToken())

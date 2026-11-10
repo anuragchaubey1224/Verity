@@ -1,27 +1,39 @@
 "use client"
 
 import { useCallback, useRef, useState } from "react"
-import { uploadFile } from "@/lib/api"
+import { FileText, Loader2, TriangleAlert, UploadCloud } from "lucide-react"
 
-const DOMAINS = [
-  { value: "ml", label: "ML / AI" },
-  { value: "dl", label: "Deep Learning" },
-  { value: "cs", label: "Computer Science" },
-  { value: "physics", label: "Physics" },
-  { value: "bio", label: "Biology" },
-  { value: "finance", label: "Finance" },
-  { value: "math", label: "Mathematics" },
-]
+import { uploadFile } from "@/lib/api"
+import { cn } from "@/lib/utils"
+import { UPLOAD_DOMAINS } from "@/components/chat/domains"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 interface UploadModalProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   /** The chat's current domain — used as the default ("all" falls back to "ml"). */
   defaultDomain: string
-  onClose: () => void
   /** Called after a successful upload with the document title and its id. */
   onUploaded: (title: string, documentId: string) => void
 }
 
-export function UploadModal({ defaultDomain, onClose, onUploaded }: UploadModalProps) {
+export function UploadModal({ open, onOpenChange, defaultDomain, onUploaded }: UploadModalProps) {
   const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState("")
   const [domain, setDomain] = useState(defaultDomain === "all" ? "ml" : defaultDomain)
@@ -33,7 +45,7 @@ export function UploadModal({ defaultDomain, onClose, onUploaded }: UploadModalP
   const pickFile = useCallback((f: File | null | undefined) => {
     if (!f) return
     setFile(f)
-    setTitle(prev => prev.trim() ? prev : f.name.replace(/\.[^.]+$/, ""))
+    setTitle(prev => (prev.trim() ? prev : f.name.replace(/\.[^.]+$/, "")))
   }, [])
 
   const canSubmit = !!file && !!title.trim() && !uploading
@@ -45,53 +57,43 @@ export function UploadModal({ defaultDomain, onClose, onUploaded }: UploadModalP
     try {
       const res = await uploadFile(file, title.trim(), domain)
       onUploaded(title.trim(), res.document_id)
+      // reset for next time
+      setFile(null)
+      setTitle("")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed")
+    } finally {
       setUploading(false)
     }
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}
-      onClick={() => { if (!uploading) onClose() }}
-    >
-      <div
-        className="w-full max-w-md rounded-2xl p-6 space-y-5"
-        style={{ background: "var(--card)", border: "1px solid var(--border)", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-lg font-semibold" style={{ color: "var(--foreground)" }}>Add Document</h2>
-            <p className="text-sm mt-1" style={{ color: "var(--muted-foreground)" }}>
-              Upload a paper — it starts a new chat you can discuss it in.
-            </p>
-          </div>
-          <button
-            onClick={() => { if (!uploading) onClose() }}
-            className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-base transition-all"
-            style={{ color: "var(--muted-foreground)" }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)" }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "" }}
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
+    <Dialog open={open} onOpenChange={o => { if (!uploading) onOpenChange(o) }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add a document</DialogTitle>
+          <DialogDescription>
+            Upload a paper to start a new chat scoped to it. PDF, DOCX, TXT, or Markdown.
+          </DialogDescription>
+        </DialogHeader>
 
-        {/* Drag & drop */}
+        {/* Drop zone */}
         <div
           onDragOver={e => { e.preventDefault(); setDragOver(true) }}
           onDragLeave={() => setDragOver(false)}
           onDrop={e => { e.preventDefault(); setDragOver(false); pickFile(e.dataTransfer.files[0]) }}
           onClick={() => fileInputRef.current?.click()}
-          className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all"
-          style={dragOver ? { borderColor: "#4f8ef7", background: "rgba(79,142,247,0.06)" }
-            : file ? { borderColor: "#34d399", background: "rgba(52,211,153,0.06)" }
-            : { borderColor: "var(--border)" }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click() } }}
+          className={cn(
+            "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed p-8 text-center transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            dragOver
+              ? "border-primary bg-primary/5"
+              : file
+                ? "border-success/40 bg-success/5"
+                : "border-input hover:border-ring/50 hover:bg-accent/50",
+          )}
         >
           <input
             ref={fileInputRef}
@@ -101,84 +103,80 @@ export function UploadModal({ defaultDomain, onClose, onUploaded }: UploadModalP
             onChange={e => pickFile(e.target.files?.[0])}
           />
           {file ? (
-            <div>
-              <div className="text-3xl mb-2">📄</div>
-              <p className="text-base font-medium" style={{ color: "#34d399" }}>{file.name}</p>
-              <p className="text-sm mt-1" style={{ color: "var(--muted-foreground)" }}>
-                {(file.size / 1024).toFixed(0)} KB · Click to change
-              </p>
-            </div>
+            <>
+              <span className="grid size-10 place-items-center rounded-xl bg-success/10 text-success">
+                <FileText className="size-5" />
+              </span>
+              <p className="text-sm font-medium text-foreground">{file.name}</p>
+              <p className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(0)} KB · Click to change</p>
+            </>
           ) : (
-            <div>
-              <div className="text-3xl mb-2 opacity-40">📁</div>
-              <p className="text-base font-medium" style={{ color: "var(--foreground)" }}>Drag &amp; drop your file here</p>
-              <p className="text-sm mt-1" style={{ color: "var(--muted-foreground)" }}>
-                or click to browse · PDF, TXT, DOCX, MD
-              </p>
-            </div>
+            <>
+              <span className="grid size-10 place-items-center rounded-xl bg-muted text-muted-foreground">
+                <UploadCloud className="size-5" />
+              </span>
+              <p className="text-sm font-medium text-foreground">Drag &amp; drop, or click to browse</p>
+              <p className="text-xs text-muted-foreground">PDF, DOCX, TXT, MD</p>
+            </>
           )}
         </div>
 
-        {/* Title (required) */}
-        <div className="space-y-2">
-          <label className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
-            Document Title <span style={{ color: "#e57373" }}>*</span>
+        {/* Title */}
+        <div className="space-y-1.5">
+          <label htmlFor="doc-title" className="text-xs font-medium text-foreground">
+            Document title <span className="text-destructive">*</span>
           </label>
-          <input
+          <Input
+            id="doc-title"
             value={title}
             onChange={e => setTitle(e.target.value)}
             placeholder="Attention Is All You Need"
             disabled={uploading}
-            className="w-full px-3.5 py-2.5 rounded-xl text-base outline-none transition-all"
-            style={{ background: "var(--secondary)", border: "1px solid var(--border)", color: "var(--foreground)" }}
-            onFocus={e => { e.currentTarget.style.borderColor = "#4f8ef7" }}
-            onBlur={e => { e.currentTarget.style.borderColor = "var(--border)" }}
+            className="h-9"
           />
-          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>This names the new chat.</p>
+          <p className="text-xs text-muted-foreground">This names the new chat.</p>
         </div>
 
         {/* Domain */}
-        <div className="space-y-2">
-          <label className="text-sm font-medium" style={{ color: "var(--foreground)" }}>Domain</label>
-          <select
-            value={domain}
-            onChange={e => setDomain(e.target.value)}
-            disabled={uploading}
-            className="w-full px-3.5 py-2.5 rounded-xl text-base outline-none transition-all appearance-none cursor-pointer"
-            style={{ background: "var(--secondary)", border: "1px solid var(--border)", color: "var(--foreground)" }}
-          >
-            {DOMAINS.map(d => (
-              <option key={d.value} value={d.value} style={{ background: "var(--card)" }}>{d.label}</option>
-            ))}
-          </select>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-foreground">Domain</label>
+          <Select value={domain} onValueChange={setDomain} disabled={uploading}>
+            <SelectTrigger className="h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              {UPLOAD_DOMAINS.map(d => (
+                <SelectItem key={d.value} value={d.value}>
+                  <d.icon className="size-4 text-muted-foreground" />
+                  {d.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {error && (
-          <div className="rounded-xl px-4 py-3 text-sm"
-            style={{ background: "rgba(229,87,87,0.1)", border: "1px solid rgba(229,87,87,0.25)", color: "#e57373" }}>
-            {error}
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <span>{error}</span>
           </div>
         )}
 
-        {/* Upload */}
-        <button
-          onClick={submit}
-          disabled={!canSubmit}
-          className="w-full py-3 rounded-xl text-base font-semibold text-white transition-all"
-          style={!canSubmit ? {
-            background: "var(--secondary)", color: "var(--muted-foreground)", cursor: "not-allowed",
-          } : {
-            background: "linear-gradient(135deg, #4f8ef7 0%, #3a7aec 100%)", boxShadow: "0 4px 16px rgba(79,142,247,0.35)",
-          }}
-        >
-          {uploading ? (
-            <span className="flex items-center justify-center gap-2">
-              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-              Uploading &amp; indexing…
-            </span>
-          ) : "Upload & Start Chat"}
-        </button>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={uploading} className="h-9">
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={!canSubmit} className="h-9 gap-2">
+            {uploading ? (
+              <>
+                <Loader2 className="size-4 animate-spin" /> Uploading &amp; indexing…
+              </>
+            ) : (
+              "Upload & start chat"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

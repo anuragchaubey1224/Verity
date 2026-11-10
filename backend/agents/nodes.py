@@ -1,13 +1,14 @@
+import asyncio
 import json
 import logging
 import time
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 
 log = logging.getLogger("verity.agent")
 
 from backend.agents.state import AgentState
 from backend.core.config import settings
-from backend.core.llm import llm as _llm, provider_kwargs
+from backend.core.llm import async_llm as _async_llm, llm as _llm, provider_kwargs
 from backend.prompts.report import build_report_prompt
 from backend.retrieval.context_assembler import ContextAssembler
 from backend.retrieval.hybrid_retriever import HybridRetriever
@@ -286,6 +287,57 @@ def stream_generator_node(state: AgentState) -> Generator[str, None, dict]:
         token = chunk.choices[0].delta.content or ""
         if token:
             yield token
+
+    log.info("[generator:stream] stream complete")
+
+
+async def stream_generator_node_async(state: AgentState) -> AsyncGenerator[str, None]:
+    """Async streaming generator used by the FastAPI SSE endpoint.
+
+    The sync `stream_generator_node` above blocks the event loop for the whole
+    answer (the OpenAI SDK call and iteration are blocking I/O). This version
+    awaits the async client, so one long answer no longer freezes every other
+    request — including health checks — on the same worker.
+    """
+    log.info("[generator:stream] starting for %d chunks...", len(state["chunks"]))
+    context = _assembler.assemble(state["chunks"])
+    prompt = build_report_prompt(
+        context=context,
+        question=state["query"],
+        conversation_history=state.get("conversation_history"),
+        domain=state.get("domain"),
+    )
+
+    stream = None
+    for attempt in range(3):
+        try:
+            stream = await _async_llm.chat.completions.create(
+                **provider_kwargs(),
+                model=settings.llm_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=4096,
+                stream=True,
+            )
+            break
+        except Exception as exc:
+            if attempt < 2:
+                log.warning("[generator:stream] LLM call failed (attempt %d/3), retrying: %s", attempt + 1, exc)
+                await asyncio.sleep(2)
+            else:
+                raise
+
+    try:
+        async for chunk in stream:
+            token = chunk.choices[0].delta.content or ""
+            if token:
+                yield token
+    finally:
+        # Close the upstream HTTP stream when the client disconnects, so we stop
+        # paying for tokens nobody will read.
+        close = getattr(stream, "close", None)
+        if close is not None:
+            await close()
 
     log.info("[generator:stream] stream complete")
 

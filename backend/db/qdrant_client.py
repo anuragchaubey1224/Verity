@@ -32,3 +32,12 @@ def init_collection():
             )
         except Exception:
             pass  # index already exists
+
+
+def ping() -> bool:
+    """Lightweight reachability check for /health — never raises."""
+    try:
+        client.get_collections()
+        return True
+    except Exception:
+        return False

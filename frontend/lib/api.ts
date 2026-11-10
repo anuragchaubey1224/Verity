@@ -2,6 +2,57 @@ import { clearToken, getToken } from "./auth"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
+const RETRYABLE_STATUS = new Set([502, 503, 504])
+const WAKE_MAX_ATTEMPTS = 4
+const WAKE_BASE_DELAY_MS = 1500
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * fetch wrapper with cold-start awareness.
+ *
+ * The backend runs on a free tier that can sleep and take tens of seconds to
+ * wake. A first request therefore often fails with an opaque network error or a
+ * 502/503/504 even though the service is healthy. We retry those with backoff
+ * for idempotent requests (GET/HEAD and explicit opt-in like query/stream) and
+ * report a "waking up" message instead of "is the backend running?".
+ *
+ * Abort errors pass through so callers can still detect stream timeouts.
+ */
+async function apiFetch(
+  input: string,
+  init?: RequestInit,
+  opts?: { retries?: number },
+): Promise<Response> {
+  const method = (init?.method ?? "GET").toUpperCase()
+  const retries = opts?.retries ?? (method === "GET" || method === "HEAD" ? WAKE_MAX_ATTEMPTS - 1 : 0)
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError")
+    try {
+      const res = await fetch(input, init)
+      if (RETRYABLE_STATUS.has(res.status) && attempt < retries) {
+        await sleep(WAKE_BASE_DELAY_MS * (attempt + 1))
+        continue
+      }
+      return res
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err
+      if (attempt < retries) {
+        await sleep(WAKE_BASE_DELAY_MS * (attempt + 1))
+        continue
+      }
+    }
+  }
+
+  throw new Error(
+    `The Verity server is starting up or couldn't be reached at ${API_BASE}. ` +
+      "It may be waking from idle — please try again in a few seconds.",
+  )
+}
+
 function authHeaders(extra?: HeadersInit): HeadersInit {
   const token = getToken()
   return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra }
@@ -63,8 +114,16 @@ export interface TaskStatusResponse {
   error?: string
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers: authHeaders(init?.headers) })
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: { retries?: number },
+): Promise<T> {
+  const res = await apiFetch(
+    `${API_BASE}${path}`,
+    { ...init, headers: authHeaders(init?.headers) },
+    opts,
+  )
   if (res.status === 401) {
     handleUnauthorized()
     throw new Error("Unauthorized")
@@ -77,11 +136,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function queryKB(req: QueryRequest): Promise<QueryResponse> {
-  return request("/research/query", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  })
+  return request(
+    "/research/query",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+    { retries: 2 }, // safe to retry: questions are read-only
+  )
 }
 
 export interface PipelineInfo {
@@ -111,9 +174,10 @@ export async function queryKBStream(
   req: QueryRequest,
   onEvent: (event: StreamEvent) => void,
 ): Promise<void> {
-  // Abort if the backend goes silent for too long, so the UI never hangs forever.
+  // Abort if the backend goes silent for too long, so the UI never hangs
+  // forever. Generous enough to survive a free-tier cold start.
   const controller = new AbortController()
-  const IDLE_MS = 90_000
+  const IDLE_MS = 120_000
   let idle = setTimeout(() => controller.abort(), IDLE_MS)
   const resetIdle = () => {
     clearTimeout(idle)
@@ -121,12 +185,18 @@ export async function queryKBStream(
   }
 
   try {
-    const res = await fetch(`${API_BASE}/research/query/stream`, {
-      method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify(req),
-      signal: controller.signal,
-    })
+    // Retry only before the stream starts (connection refused / 502/503/504).
+    // Once bytes arrive a mid-stream failure is surfaced instead of replayed.
+    const res = await apiFetch(
+      `${API_BASE}/research/query/stream`,
+      {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(req),
+        signal: controller.signal,
+      },
+      { retries: 3 },
+    )
 
     if (res.status === 401) {
       handleUnauthorized()
@@ -217,7 +287,7 @@ export async function uploadFile(file: File, title: string, domain: string): Pro
   form.append("file", file)
   form.append("title", title)
   form.append("domain", domain)
-  const res = await fetch(`${API_BASE}/research/upload`, {
+  const res = await apiFetch(`${API_BASE}/research/upload`, {
     method: "POST",
     headers: authHeaders(),  // no Content-Type — browser sets the multipart boundary
     body: form,
@@ -240,7 +310,7 @@ export interface TokenResponse {
 }
 
 export async function register(email: string, password: string): Promise<TokenResponse> {
-  const res = await fetch(`${API_BASE}/auth/register`, {
+  const res = await apiFetch(`${API_BASE}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -253,7 +323,7 @@ export async function register(email: string, password: string): Promise<TokenRe
 }
 
 export async function login(email: string, password: string): Promise<TokenResponse> {
-  const res = await fetch(`${API_BASE}/auth/login`, {
+  const res = await apiFetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),

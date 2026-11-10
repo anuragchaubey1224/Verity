@@ -5,7 +5,7 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from backend.core.config import settings
 from backend.db.qdrant_client import client as qdrant_client
-from backend.ingestion.embedding.embedding_service import EmbeddingService
+from backend.ingestion.embedding.embedding_service import get_embedding_service
 
 log = logging.getLogger("verity.retrieval.dense")
 
@@ -21,13 +21,10 @@ class RetrievedChunk:
 
 
 class DenseRetriever:
-    def __init__(self):
-        self.embedder = EmbeddingService()
-
     def retrieve(self, query: str, top_k: int = 5, domain: str | None = None, user_id: str | None = None, document_id: str | None = None) -> list[RetrievedChunk]:
         """Embed the query and search Qdrant for the most similar chunks."""
         log.info("[dense] embedding query...")
-        vector = self.embedder.embed_one(query)
+        vector = get_embedding_service().embed_one(query)
 
         must = []
         if user_id:

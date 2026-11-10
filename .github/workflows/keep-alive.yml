@@ -1,0 +1,61 @@
+name: Keep backend + Qdrant warm
+
+# Free-tier services idle themselves out:
+#   - HF Spaces sleep after ~48h without traffic, and can hit a "scheduling
+#     failure" on cold wake (see interview_docs/19_debugging_war_stories.md).
+#   - Qdrant Cloud free clusters can pause after long inactivity.
+#
+# A ping every 30 minutes to /health resets both clocks. /health touches Qdrant
+# but NOT Postgres on purpose: keeping Neon compute awake 24/7 would blow the
+# free compute-hour allowance, while Neon's scale-to-zero cold start is short.
+#
+# GitHub scheduled workflows are best-effort (they can be delayed, and public
+# repos with 60 days of inactivity get schedules disabled). Treat this as the
+# backup and also configure an external uptime monitor (Better Stack /
+# UptimeRobot / cron-job.org) against the same /health URL.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # keep-warm
+    - cron: "0 6 * * *"      # daily full readiness check
+  workflow_dispatch: {}
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  keep-warm:
+    if: github.event.schedule != '0 6 * * *'
+    runs-on: ubuntu-latest
+    env:
+      BACKEND_URL: https://${{ vars.HF_USERNAME }}-${{ vars.HF_SPACE_NAME }}.hf.space
+    steps:
+      - name: Validate configuration
+        run: |
+          if [ -z "${{ vars.HF_USERNAME }}" ] || [ -z "${{ vars.HF_SPACE_NAME }}" ]; then
+            echo "Set repository variables HF_USERNAME and HF_SPACE_NAME." >&2
+            exit 1
+          fi
+
+      - name: Ping /health
+        run: |
+          echo "Pinging $BACKEND_URL/health"
+          curl -fsS \
+            --retry 5 --retry-all-errors --retry-delay 10 \
+            --max-time 90 \
+            "$BACKEND_URL/health"
+          echo
+
+  readiness:
+    if: github.event.schedule == '0 6 * * *'
+    runs-on: ubuntu-latest
+    env:
+      BACKEND_URL: https://${{ vars.HF_USERNAME }}-${{ vars.HF_SPACE_NAME }}.hf.space
+    steps:
+      - name: Full dependency readiness (Postgres + Qdrant + Redis)
+        run: |
+          echo "Checking $BACKEND_URL/health/ready"
+          curl -fsS --retry 3 --retry-all-errors --retry-delay 15 --max-time 90 \
+            "$BACKEND_URL/health/ready"
+          echo

@@ -7,6 +7,7 @@ to top_k.
 """
 
 import logging
+import threading
 
 from backend.core.config import settings
 from backend.retrieval.dense_retriever import RetrievedChunk
@@ -14,15 +15,19 @@ from backend.retrieval.dense_retriever import RetrievedChunk
 log = logging.getLogger("verity.retrieval.rerank")
 
 _model = None
+_model_lock = threading.Lock()
 
 
 def _get_model():
+    """Lazy singleton — reranking runs in a worker thread, so guard the load."""
     global _model
     if _model is None:
-        from fastembed.rerank.cross_encoder import TextCrossEncoder
-        log.info("[rerank] loading model: %s", settings.reranker_model)
-        _model = TextCrossEncoder(model_name=settings.reranker_model)
-        log.info("[rerank] model ready")
+        with _model_lock:
+            if _model is None:
+                from fastembed.rerank.cross_encoder import TextCrossEncoder
+                log.info("[rerank] loading model: %s", settings.reranker_model)
+                _model = TextCrossEncoder(model_name=settings.reranker_model)
+                log.info("[rerank] model ready")
     return _model
 
 

@@ -2,9 +2,8 @@ import asyncio
 import json
 import logging
 import re
-import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import aclosing
 from pathlib import Path
 
 from celery.result import AsyncResult
@@ -14,18 +13,14 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.graph import build_graph
-from backend.agents.nodes import stream_generator_node
+from backend.agents.nodes import stream_generator_node_async
 from backend.core.config import settings
-from backend.core.llm import llm as _llm, provider_kwargs
+from backend.core.llm import async_llm as _async_llm, provider_kwargs
 from backend.retrieval.hybrid_retriever import HybridRetriever
-from backend.retrieval.context_assembler import ContextAssembler
 from backend.retrieval.dense_retriever import RetrievedChunk
 from backend.retrieval.web_searcher import search_web
 
-_retriever = HybridRetriever()
 _stream_retriever = HybridRetriever(use_hyde=False, use_graph=False)
-_assembler = ContextAssembler()
-_thread_pool = ThreadPoolExecutor(max_workers=2)
 log = logging.getLogger("verity.api")
 
 _DOMAIN_LABELS = {
@@ -39,9 +34,9 @@ _DOMAIN_LABELS = {
 }
 
 
-def _check_domain_sync(query: str, domain_label: str) -> bool:
+async def _check_domain(query: str, domain_label: str) -> bool:
     """Returns True if query is relevant to the domain, False if off-domain."""
-    resp = _llm.chat.completions.create(**provider_kwargs(),
+    resp = await _async_llm.chat.completions.create(**provider_kwargs(),
         model=settings.fast_llm_model,
         messages=[{
             "role": "user",
@@ -54,7 +49,7 @@ def _check_domain_sync(query: str, domain_label: str) -> bool:
         temperature=0,
         max_tokens=5,
     )
-    answer = resp.choices[0].message.content.strip().lower()
+    answer = (resp.choices[0].message.content or "").strip().lower()
     return answer.startswith("yes")
 from backend.api.schemas.research import (
     AsyncIngestResponse,
@@ -106,9 +101,9 @@ def _looks_like_smalltalk(query: str) -> bool:
     return bool(_SMALLTALK_RE.match(query.strip()))
 
 
-def _classify_intent_sync(query: str) -> str:
+async def _classify_intent(query: str) -> str:
     """Fast-LLM fallback for short, ambiguous messages → 'chitchat' or 'research'."""
-    resp = _llm.chat.completions.create(**provider_kwargs(),
+    resp = await _async_llm.chat.completions.create(**provider_kwargs(),
         model=settings.fast_llm_model,
         messages=[{
             "role": "user",
@@ -130,7 +125,7 @@ def _classify_intent_sync(query: str) -> str:
     return "chitchat" if answer.startswith("chitchat") else "research"
 
 
-def _stream_chitchat(query: str, conversation_history: list | None = None):
+async def _stream_chitchat(query: str, conversation_history: list | None = None):
     """Stream a short conversational reply — no retrieval, no citations."""
     messages = [{"role": "system", "content": _CHITCHAT_SYSTEM}]
     for turn in (conversation_history or [])[-4:]:
@@ -141,7 +136,7 @@ def _stream_chitchat(query: str, conversation_history: list | None = None):
     stream = None
     for attempt in range(3):
         try:
-            stream = _llm.chat.completions.create(**provider_kwargs(),
+            stream = await _async_llm.chat.completions.create(**provider_kwargs(),
                 model=settings.llm_model,
                 messages=messages,
                 temperature=0.5,
@@ -152,14 +147,34 @@ def _stream_chitchat(query: str, conversation_history: list | None = None):
         except Exception as exc:
             if attempt < 2:
                 log.warning("[chitchat] LLM call failed (attempt %d/3), retrying: %s", attempt + 1, exc)
-                time.sleep(2)
+                await asyncio.sleep(2)
             else:
                 raise
 
-    for chunk in stream:
+    async for chunk in stream:
         token = chunk.choices[0].delta.content or ""
         if token:
             yield token
+
+
+def _enqueue_web_ingest(web_results: list[dict], domain: str | None, user_id: str) -> None:
+    """Queue web-search results for background KB ingestion (sync Celery call)."""
+    try:
+        from backend.workers.tasks import ingest_text_task
+        for r in web_results:
+            if r.get("content") and len(r["content"]) > 100:
+                ingest_text_task.apply_async(
+                    kwargs=dict(
+                        text=r["content"],
+                        title=r.get("title") or r.get("url", "Web Result")[:200],
+                        source_url=r.get("url", ""),
+                        domain=domain,
+                        user_id=user_id,
+                    ),
+                    ignore_result=True,
+                )
+    except Exception as celery_err:
+        log.warning("[stream] background KB ingest skipped (Celery unavailable): %s", celery_err)
 
 
 @router.get("/sessions")
@@ -304,7 +319,7 @@ async def query_stream(
     user_id = str(current_user.id)
 
     # Rate limiting — per authenticated user
-    allowed, retry_after = check_rate_limit(user_id)
+    allowed, retry_after = await check_rate_limit(user_id)
     if not allowed:
         raise HTTPException(
             status_code=429,
@@ -322,16 +337,13 @@ async def query_stream(
     _q = request.query.strip()
     is_chitchat = _looks_like_smalltalk(_q)
     if not is_chitchat and 0 < len(_q.split()) <= 6:
-        loop = asyncio.get_event_loop()
-        is_chitchat = (
-            await loop.run_in_executor(_thread_pool, _classify_intent_sync, _q)
-        ) == "chitchat"
+        is_chitchat = (await _classify_intent(_q)) == "chitchat"
 
     if is_chitchat:
         async def _chat_stream():
             full = ""
             try:
-                for token in _stream_chitchat(request.query, conversation_history):
+                async for token in _stream_chitchat(request.query, conversation_history):
                     full += token
                     yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
             except Exception as exc:
@@ -354,10 +366,7 @@ async def query_stream(
     # Domain guard — fast binary check before retrieval
     if request.domain and request.domain != "all" and request.domain in _DOMAIN_LABELS:
         domain_label = _DOMAIN_LABELS[request.domain]
-        loop = asyncio.get_event_loop()
-        is_on_domain = await loop.run_in_executor(
-            _thread_pool, _check_domain_sync, request.query, domain_label
-        )
+        is_on_domain = await _check_domain(request.query, domain_label)
         if not is_on_domain:
             async def _refuse():
                 msg = (
@@ -415,7 +424,8 @@ async def query_stream(
 
         if needs_web:
             yield f"data: {json.dumps({'type': 'token', 'content': '_Searching the web..._\n\n'})}\n\n"
-            web_results = search_web(request.query)
+            # search_web is sync (Tavily/httpx) — keep it off the event loop.
+            web_results = await asyncio.to_thread(search_web, request.query)
             if not web_results:
                 yield f"data: {json.dumps({'type': 'error', 'content': 'No relevant information found in the knowledge base or on the web.'})}\n\n"
                 yield "data: {\"type\": \"done\"}\n\n"
@@ -434,27 +444,10 @@ async def query_stream(
             web_search_used = True
             doc_title_map.update({f"web_{i}": r.get("title", r.get("url", "Web Result")) for i, r in enumerate(web_results[:5])})
 
-            # Fire-and-forget: ingest web results into KB in background
-            # Wrapped in try-except — if Celery/Redis is down, stream must NOT crash
-            try:
-                from backend.workers.tasks import ingest_text_task
-                for r in web_results:
-                    if r.get("content") and len(r["content"]) > 100:
-                        ingest_text_task.apply_async(
-                            kwargs=dict(
-                                text=r["content"],
-                                title=r.get("title") or r.get("url", "Web Result")[:200],
-                                source_url=r.get("url", ""),
-                                domain=request.domain,
-                                user_id=user_id,
-                            ),
-                            ignore_result=True,
-                        )
-            except Exception as _celery_err:
-                import logging
-                logging.getLogger("verity.api").warning(
-                    "[stream] background KB ingest skipped (Celery unavailable): %s", _celery_err
-                )
+            # Fire-and-forget: ingest web results into KB in background.
+            # Enqueueing talks to Redis over TLS (Upstash) — run it in a thread so
+            # a slow broker never stalls the SSE stream. Errors are swallowed.
+            await asyncio.to_thread(_enqueue_web_ingest, web_results, request.domain, user_id)
 
         # Stream tokens
         gen_state = {
@@ -467,10 +460,17 @@ async def query_stream(
             "web_sources": [], "sources": [],
         }
         full_answer = ""
+        client_gone = False
         try:
-            for token in stream_generator_node(gen_state):
-                full_answer += token
-                yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+            async with aclosing(stream_generator_node_async(gen_state)) as tokens:
+                async for token in tokens:
+                    # Stop burning LLM tokens once the browser has gone away.
+                    if await req.is_disconnected():
+                        client_gone = True
+                        log.info("[stream] client disconnected — stopping generation")
+                        break
+                    full_answer += token
+                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
         except Exception as gen_err:
             log.warning("[stream] generation failed: %s", gen_err)
             err_str = str(gen_err)
@@ -480,6 +480,9 @@ async def query_stream(
                 msg = "Answer generation failed. Please try again."
             yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
             yield "data: {\"type\": \"done\"}\n\n"
+            return
+
+        if client_gone:
             return
 
         # Hallucination check skipped in stream path (saves ~6s after generation)

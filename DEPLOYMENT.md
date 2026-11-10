@@ -101,7 +101,44 @@ Frontend (Vercel): `NEXT_PUBLIC_API_URL=https://<HF_USERNAME>-<HF_SPACE_NAME>.hf
 
 - **Frontend:** Vercel rebuilds on every push to `main` (native Git integration).
 - **Backend:** the GitHub Action pushes the repo to the HF Space, which rebuilds
-  the Docker image; `deploy/hf/start.sh` runs `alembic upgrade head`, the Celery
-  worker, then Uvicorn on port 7860.
+  the Docker image; `deploy/hf/start.sh` runs `alembic upgrade head`, starts the
+  Celery worker and Uvicorn as supervised siblings, and exits non-zero if either
+  dies so the platform restarts the container.
 
 So after the initial setup, **`git push` → both frontend and backend update.**
+
+---
+
+## 6. Keeping free-tier services awake
+
+Free HF Spaces **sleep after ~48h of inactivity**, and a Space that has been
+idle for a long time can fail to schedule on wake (HF returns `503: Your space is
+in error`). Neon also suspends its compute, and Qdrant Cloud can pause idle
+clusters.
+
+Use two layers:
+
+1. **External uptime monitor (primary).** Create a free monitor (Better Stack,
+   UptimeRobot, or cron-job.org) that sends `GET` to
+   `https://<HF_USERNAME>-<HF_SPACE_NAME>.hf.space/health` every **5–10 minutes**.
+   This is more reliable than GitHub's scheduler.
+2. **GitHub Actions backup.** `.github/workflows/keep-alive.yml` pings the same
+   endpoint every 30 minutes. It requires the repository variables
+   `HF_USERNAME` and `HF_SPACE_NAME`.
+
+Health endpoints:
+
+| Endpoint | Checks | Use |
+|---|---|---|
+| `/health/live` | process only | container liveness |
+| `/health` | process + Qdrant | keep-alive / uptime monitor |
+| `/health/ready` | Postgres + Qdrant + Redis | full readiness (`503` if degraded) |
+
+`/health` intentionally does **not** touch Postgres: pinging Neon 24/7 would
+exceed the free compute-hour allowance. Neon's scale-to-zero cold start is short;
+the frontend retries cold-start failures with backoff and a "waking up" message.
+
+> **Known limitation:** the HF container's filesystem is ephemeral. Uploaded
+> files under `data/uploads/` are lost on restart/rebuild; chunks and vectors
+> remain in Postgres/Qdrant. Move originals to S3/R2 if you need re-ingestion
+> from the source file.

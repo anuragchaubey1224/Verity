@@ -195,6 +195,19 @@ Starts everything: Postgres, Qdrant, Redis, backend (with auto-migration), Celer
 
 **Free-tier cloud** — Vercel (frontend) + Hugging Face Spaces (backend + worker) + Neon (Postgres) + Qdrant Cloud + Upstash (Redis), auto-deployed on push → see [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
+**Staying awake:** free HF Spaces sleep after ~48h of inactivity (and can fail to
+schedule on a cold wake). Two layers keep the backend warm:
+
+- `.github/workflows/keep-alive.yml` pings `/health` every 30 minutes (backup).
+- An external uptime monitor (Better Stack / UptimeRobot / cron-job.org) should
+  ping the same URL every 5–10 minutes. This is the primary guarantee, since
+  GitHub scheduled workflows are best-effort and can be disabled after 60 days of
+  repository inactivity.
+
+`/health` touches Qdrant but deliberately **not** Postgres, so Neon's free
+compute hours are not burned by keep-alive traffic. `/health/ready` checks
+Postgres + Qdrant + Redis and returns `503` when any dependency is down.
+
 ---
 
 ## Ingest Papers
@@ -224,6 +237,9 @@ python -m scripts.build_raptor --domain ml
 | POST | `/research/query` | Query knowledge base (full agentic) |
 | POST | `/research/query/stream` | Streaming query (SSE) |
 | GET | `/research/sessions` | List the user's chat sessions |
+| GET | `/health/live` | Liveness — process only |
+| GET | `/health` | Keep-alive — process + Qdrant |
+| GET | `/health/ready` | Readiness — Postgres + Qdrant + Redis (`503` if degraded) |
 
 All `/research/*` routes require an `Authorization: Bearer <token>` header.
 
