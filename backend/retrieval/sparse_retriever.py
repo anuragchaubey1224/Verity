@@ -63,7 +63,7 @@ class SparseRetriever:
                 FROM chunks c
                 JOIN documents d ON c.document_id = d.id
                 WHERE c.document_id = CAST(:document_id AS uuid)
-                  AND (:user_id IS NULL OR d.user_id = CAST(:user_id AS uuid))
+                  AND (CAST(:user_id AS uuid) IS NULL OR d.user_id = CAST(:user_id AS uuid))
                 ORDER BY c.chunk_index
                 LIMIT :top_k
             """)
